@@ -1,0 +1,6 @@
+config.json
+state.json
+*.bak
+*.tmp
+__pycache__/
+workspace/docs/*

@@ -1,4 +1,8 @@
-from flask import Flask, request, render_template_string, session, redirect, url_for
+from flask import Flask, request, render_template_string, session, redirect, url_for, jsonify
+import hashlib
+import hmac
+import json
+import os
 import socket
 import time
 import threading
@@ -6,18 +10,50 @@ import logging
 from datetime import datetime
 import secrets
 
-app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)  # Generate random secret key for sessions
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
-# Konfiguracja
-PASSWORD = "CHANGE_YOUR_PASSWORD"
-TARGET_MAC = "244BFE070CE2"
-TARGET_IPS = ["192.168.1.25", "192.168.1.255"]
-WOL_PORTS = [7, 9]
-SERVER_PORT = 5000
+# Device-local settings live in config.json, which updates never overwrite.
+DEFAULT_CONFIG = {
+    "password": "CHANGE_YOUR_PASSWORD",
+    "target_mac": "244BFE070CE2",
+    "target_ips": ["192.168.1.25", "192.168.1.255"],
+    "wol_ports": [7, 9],
+    "server_port": 5000,
+}
+
+
+def load_config():
+    config = dict(DEFAULT_CONFIG)
+    exists = os.path.exists(CONFIG_PATH)
+    if exists:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            config.update(json.load(f))
+    if not exists or not config.get("secret_key"):
+        # Persisted so sessions survive restarts caused by updates.
+        config["secret_key"] = config.get("secret_key") or secrets.token_hex(32)
+        tmp = CONFIG_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp, CONFIG_PATH)
+    return config
+
+
+config = load_config()
+PASSWORD = config["password"]
+TARGET_MAC = "".join(c for c in config["target_mac"] if c.isalnum()).upper()
+TARGET_IPS = config["target_ips"]
+WOL_PORTS = config["wol_ports"]
+SERVER_PORT = int(config["server_port"])
+
+with open(os.path.abspath(__file__), "rb") as _f:
+    _source = _f.read()
+VERSION = hashlib.sha1(b"blob %d\0" % len(_source) + _source).hexdigest()[:7]
+
+app = Flask(__name__)
+app.secret_key = config["secret_key"]
 
 # Zmienne globalne
-server_running = False
 connection_status = "UNKNOWN"
 last_wol_time = None
 wol_count = 0
@@ -29,9 +65,9 @@ logger = logging.getLogger(__name__)
 def check_internet():
     """Sprawdź połączenie internetowe"""
     try:
-        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        socket.create_connection(("8.8.8.8", 53), timeout=3).close()
         return True
-    except:
+    except OSError:
         return False
 
 def is_authenticated():
@@ -46,30 +82,29 @@ def require_auth():
 
 def monitor_connection():
     """Monitor połączenia w tle"""
-    global server_running, connection_status
-    
+    # Status only: the LAN web server keeps serving when the internet drops,
+    # and process-level restarts are handled by launcher.py.
+    global connection_status
+
     while True:
         if check_internet():
             if connection_status != "OK":
                 logger.info("Internet connection restored")
                 connection_status = "OK"
-            
-            if not server_running:
-                logger.info("Restarting server...")
-                try:
-                    server_running = True
-                    app.run(host='0.0.0.0', port=SERVER_PORT, debug=False, use_reloader=False)
-                except Exception as e:
-                    logger.error(f"Server restart failed: {e}")
-                    server_running = False
-        else:
-            if connection_status != "DISCONNECTED":
-                logger.warning("Internet connection lost")
-                connection_status = "DISCONNECTED"
-                server_running = False
-            time.sleep(10)
-        
-        time.sleep(30)
+        elif connection_status != "DISCONNECTED":
+            logger.warning("Internet connection lost")
+            connection_status = "DISCONNECTED"
+        time.sleep(60)
+
+
+def watch_launcher():
+    """Exit if launcher.py dies, so an orphan never keeps holding the port."""
+    parent = os.getppid()
+    while True:
+        time.sleep(5)
+        if os.getppid() != parent:
+            logger.warning("Launcher is gone, exiting")
+            os._exit(0)
 
 def send_wol_packet():
     """Wyślij pakiet Wake-on-LAN"""
@@ -272,8 +307,8 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="info">
-            <p>MAC: 24-4B-FE-07-0C-E2</p>
-            <p>IP: 192.168.1.25</p>
+            <p>MAC: {{ mac }}</p>
+            <p>IP: {{ ip }}</p>
             {% if last_wol %}
             <p>Last WOL: {{ last_wol }}</p>
             <p>Total WOL sent: {{ wol_count }}</p>
@@ -284,21 +319,27 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def render_dashboard(**extra):
+    return render_template_string(HTML_TEMPLATE,
+                                  last_wol=last_wol_time,
+                                  wol_count=wol_count,
+                                  mac="-".join(TARGET_MAC[i:i + 2] for i in range(0, len(TARGET_MAC), 2)),
+                                  ip=TARGET_IPS[0] if TARGET_IPS else "",
+                                  **extra)
+
 @app.route('/')
 def home():
     auth_check = require_auth()
     if auth_check:
         return auth_check
-        
-    return render_template_string(HTML_TEMPLATE, 
-                                last_wol=last_wol_time, 
-                                wol_count=wol_count)
+
+    return render_dashboard()
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        password = request.form.get('password')
-        if password == PASSWORD:
+        password = request.form.get('password', '')
+        if hmac.compare_digest(password.encode(), PASSWORD.encode()):
             session['authenticated'] = True
             return redirect(url_for('home'))
         else:
@@ -325,29 +366,26 @@ def wake():
     
     if success:
         message = f"✅ WOL Sent Successfully! Packets sent: {packets} at {last_wol_time}"
-        return render_template_string(HTML_TEMPLATE, 
-                                    message=message,
-                                    last_wol=last_wol_time, 
-                                    wol_count=wol_count)
+        return render_dashboard(message=message)
     else:
-        error = "❌ WOL Failed - Could not send magic packet"
-        return render_template_string(HTML_TEMPLATE, 
-                                    error=error,
-                                    last_wol=last_wol_time, 
-                                    wol_count=wol_count)
+        return render_dashboard(error="❌ WOL Failed - Could not send magic packet")
+
+@app.route('/health')
+def health():
+    # Token lets launcher.py tell its own child apart from a stale process on the port.
+    return jsonify(ok=True, version=VERSION, token=os.environ.get("WOL_INSTANCE_TOKEN"))
 
 @app.route('/status')
 def status():
-    internet = "🟢 Connected" if check_internet() else "🔴 Disconnected"
-    server_status = "🟢 Running" if server_running else "🔴 Stopped"
-    
+    internet = {"OK": "🟢 Connected", "DISCONNECTED": "🔴 Disconnected"}.get(connection_status, "⚪ Checking")
+
     return f'''
     <div class="container">
         <h1>📊 System Status (Public)</h1>
         <div class="status-box">
             <strong>Internet:</strong> {internet}<br>
-            <strong>Server:</strong> {server_status}<br>
-            <strong>Connection Status:</strong> {connection_status}<br>
+            <strong>Server:</strong> 🟢 Running<br>
+            <strong>Version:</strong> {VERSION}<br>
             <strong>WOL Count:</strong> {wol_count}<br>
             <strong>Last WOL:</strong> {last_wol_time or "Never"}
         </div>
@@ -414,17 +452,16 @@ def logs():
     return '<h1>Logs would be here</h1><a href="/">← Back</a>'
 
 if __name__ == '__main__':
-    logger.info("Starting WOL Controller...")
-    logger.info(f"Password protection enabled")
+    logger.info(f"Starting WOL Controller {VERSION}...")
+    if PASSWORD == DEFAULT_CONFIG["password"]:
+        logger.warning(f"Default password in use, change it in {CONFIG_PATH}")
     logger.info(f"Target: {TARGET_MAC} -> {TARGET_IPS}")
-    
+
     # Uruchom monitor połączenia w tle
-    monitor_thread = threading.Thread(target=monitor_connection, daemon=True)
-    monitor_thread.start()
-    
-    server_running = True
-    connection_status = "OK" if check_internet() else "DISCONNECTED"
-    
+    threading.Thread(target=monitor_connection, daemon=True).start()
+    if os.environ.get("WOL_INSTANCE_TOKEN"):
+        threading.Thread(target=watch_launcher, daemon=True).start()
+
     try:
         app.run(host='0.0.0.0', port=SERVER_PORT, debug=False)
     except KeyboardInterrupt:
