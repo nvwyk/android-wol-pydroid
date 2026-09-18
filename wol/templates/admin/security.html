@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import event_table, field, notice, submit %}
+{% block title %}Security{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Security</h1>
+  <p class="muted">The admin password, signed-in devices and security-related events.</p>
+</div>
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="password-title">
+    <div class="card-head">
+      <h2 id="password-title">Change password</h2>
+      <p class="muted">Every other signed-in device is signed out; this one stays signed in.</p>
+    </div>
+    <form class="form" method="post" action="{{ url_for('admin.change_password') }}" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="username" value="WOL Controller" autocomplete="username" hidden>
+      {{ field('current', 'Current password', type='password', errors=errors, required=true,
+               autocomplete='current-password') }}
+      {{ field('password', 'New password', type='password', errors=errors, required=true,
+               autocomplete='new-password', hint='At least %d characters.'|format(min_length)) }}
+      {{ field('confirm', 'Repeat the new password', type='password', required=true,
+               autocomplete='new-password') }}
+      <div class="form-actions">{{ submit('Change password', 'lock') }}</div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="sessions-title">
+    <h2 id="sessions-title">Signed-in devices</h2>
+    <dl class="rows">
+      <div><dt>This browser signed in</dt><dd>{% if session_since %}{{ session_since|when }}{% else %}Unknown{% endif %}</dd></div>
+      <div><dt>Sign-in lasts</dt><dd>{{ session_days }} days without use</dd></div>
+      <div><dt>Last sign-in</dt><dd>{% if user.last_login_at %}{{ user.last_login_at|when }}{% if user.last_login_ip %} from <span class="mono">{{ user.last_login_ip }}</span>{% endif %}{% else %}Never{% endif %}</dd></div>
+      <div><dt>Password changed</dt><dd>{{ user.password_changed_at|when }}</dd></div>
+      <div class="stacked"><dt>Password storage</dt><dd>{{ hashing }}{% if cost %}. The stored hash uses cost {{ cost }}.{% endif %}</dd></div>
+    </dl>
+    <form method="post" action="{{ url_for('admin.revoke_sessions') }}"
+          data-confirm="Sign out every other device?"
+          data-confirm-detail="Every browser except this one has to enter the password again."
+          data-confirm-button="Sign them out">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ submit('Sign out other devices', 'sign-out', 'btn btn-secondary') }}
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="failed-title">
+    <div class="card-head">
+      <h2 id="failed-title">Failed sign-ins</h2>
+      <p class="muted">{{ failed_day }} in the last 24 hours. Five wrong passwords from one
+        address lock it out for 15 minutes.</p>
+    </div>
+    {{ event_table(failures, show_pc=false, show_client=true, empty='No failed sign-ins.') }}
+  </section>
+
+  <section class="card" aria-labelledby="signins-title">
+    <h2 id="signins-title">Recent sign-ins</h2>
+    {{ event_table(sign_ins, show_pc=false, show_client=true, empty='No sign-ins recorded yet.') }}
+  </section>
+
+  <section class="card span-2" aria-labelledby="events-title">
+    <div class="card-head-row">
+      <h2 id="events-title">Security events</h2>
+      <a class="link" href="{{ url_for('admin.activity_log', kind='auth') }}">All sign-in events</a>
+    </div>
+    {{ event_table(events, show_pc=false, show_client=true, empty='Nothing yet.') }}
+  </section>
+</div>
+{% endblock %}

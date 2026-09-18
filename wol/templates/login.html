@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+{% from "macros.html" import field, notice, submit %}
+{% block title %}Log in{% endblock %}
+{% block shell_class %}shell-narrow{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="page-title">
+  <div class="card-head">
+    <h1 id="page-title">Log in</h1>
+    <p class="muted">Enter the admin password to wake and manage your PCs.</p>
+  </div>
+  {%- if slow %}
+  {{ notice('warning', 'The bcrypt package is missing on this device, so checking this password can take several minutes. Install it again (pip install bcrypt), then restart.') }}
+  {%- endif %}
+  <form class="form" method="post" action="{{ url_for('main.login', next=next_page) if next_page else url_for('main.login') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="text" name="username" value="WOL Controller" autocomplete="username" hidden>
+    {{ field('password', 'Password', type='password', errors={'password': error} if error else {},
+             required=true, autofocus=true, autocomplete='current-password') }}
+    {{ submit('Log in', 'lock', 'btn btn-primary btn-lg') }}
+  </form>
+</section>
+<p class="aside">Forgot the password? Run <span class="code-sample">python server.py --reset-password</span>
+  on the device.</p>
+{%- if setting('public_status_enabled') %}
+<p class="aside"><a class="link" href="{{ url_for('main.status') }}">View public status</a></p>
+{%- endif %}
+{% endblock %}

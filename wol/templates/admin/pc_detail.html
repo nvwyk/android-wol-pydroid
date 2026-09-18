@@ -1,0 +1,145 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import chip, event_table, icon, submit %}
+{% block title %}{{ pc.name }}{% endblock %}
+{% block content %}
+{%- set results = {'sent': 'Sent', 'partial': 'Partly sent', 'failed': 'Failed'} %}
+<a class="back" href="{{ url_for('admin.pcs_list') }}">{{ icon('back') }}PCs</a>
+<div class="page-head">
+  <div>
+    <h1>{{ pc.name }}</h1>
+    <p class="muted mono" translate="no">{{ pc.mac }}</p>
+  </div>
+  <div class="actions">
+    {{ chip(status.state, status.label) }}
+  </div>
+</div>
+
+{%- if test %}
+<section class="card" id="test" aria-labelledby="test-title">
+  <div class="card-head-row">
+    <h2 id="test-title">Test packet result</h2>
+    {{ chip(test.result, results[test.result]) }}
+  </div>
+  <p>{{ test.packets_sent }} of {{ test.packets_total }} packets left this device at {{ test.created_at|when }}.
+    {%- if test.result != 'failed' %} That shows the packets went out, not that the PC received them. The status below changes once the PC answers a check.{% endif %}</p>
+  {%- if test.targets %}
+  <p class="mono muted" translate="no">{{ test.targets|replace(' ', ', ') }}</p>
+  {%- endif %}
+  {%- if test.error %}
+  <ul class="checklist">
+    {%- for problem in test.error.split('; ') %}
+    <li class="is-error">{{ icon('error') }}<span>{{ problem }}</span></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{%- endif %}
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="actions-title">
+    <h2 id="actions-title">Wake and check</h2>
+    <dl class="rows">
+      <div><dt>Status</dt><dd>{{ status.detail }}</dd></div>
+      {%- if status.checked_at %}
+      <div><dt>Last checked</dt><dd>{{ status.checked_at|when }}</dd></div>
+      {%- endif %}
+      <div><dt>Last seen online</dt><dd>{% if pc.last_seen_at %}{{ pc.last_seen_at|when }}{% else %}Not yet{% endif %}</dd></div>
+      <div><dt>Wake requests kept</dt><dd class="num">{{ totals.total }}</dd></div>
+      <div><dt>Last request</dt><dd>{% if totals.last %}{{ totals.last|when }}{% else %}None yet{% endif %}</dd></div>
+    </dl>
+    <div class="actions">
+      <form method="post" action="{{ url_for('admin.pc_test', pc_id=pc.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ submit('Send test packet', 'send', 'btn btn-primary') }}
+      </form>
+      <form method="post" action="{{ url_for('admin.pc_check', pc_id=pc.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ submit('Check now', 'restart', 'btn btn-secondary') }}
+      </form>
+    </div>
+    <p class="hint">A test packet is a real wake request: the PC wakes if it can. It works while the PC is disabled, and it is recorded in the history as a test.</p>
+  </section>
+
+  <section class="card" aria-labelledby="config-title">
+    <div class="card-head-row">
+      <h2 id="config-title">Configuration</h2>
+      <a class="btn btn-secondary" href="{{ url_for('admin.pc_edit', pc_id=pc.id) }}">{{ icon('edit') }}Edit</a>
+    </div>
+    <dl class="rows">
+      <div><dt>MAC address</dt><dd class="mono" translate="no">{{ pc.mac }}</dd></div>
+      <div><dt>IP addresses</dt><dd class="mono" translate="no">{% for address in pc.hosts %}<span class="line">{{ address }}</span>{% else %}None{% endfor %}</dd></div>
+      <div><dt>Broadcast addresses</dt><dd class="mono" translate="no">{% for address in pc.broadcasts %}<span class="line">{{ address }}</span>{% else %}None{% endfor %}</dd></div>
+      <div><dt>UDP ports</dt><dd class="mono">{{ pc.ports|join(', ') or 'None' }}</dd></div>
+      <div><dt>Packets per wake</dt><dd class="num">{{ targets|length }}</dd></div>
+      <div><dt>Reachability check</dt><dd>
+        {%- if pc.status_method == 'ping' %}Ping {{ check_host or '(no IP address)' }}
+        {%- elif pc.status_method == 'tcp' %}TCP {{ pc.status_port }} on {{ check_host or '(no IP address)' }}
+        {%- else %}Off{% endif %}</dd></div>
+      <div><dt>Enabled</dt><dd>{{ 'Yes' if pc.enabled else 'No' }}</dd></div>
+      {%- if pc.description %}
+      <div class="stacked"><dt>Notes</dt><dd>{{ pc.description }}</dd></div>
+      {%- endif %}
+    </dl>
+    <h3>Configuration check</h3>
+    <ul class="checklist">
+      {%- for problem in problems %}
+      <li class="is-error">{{ icon('error') }}<span>{{ problem }}</span></li>
+      {%- endfor %}
+      {%- for hint in hints %}
+      <li class="is-warning">{{ icon('warning') }}<span>{{ hint }}</span></li>
+      {%- endfor %}
+      {%- if not problems %}
+      <li class="is-ok">{{ icon('success') }}<span>MAC address, {{ targets|length }} target{{ '' if targets|length == 1 else 's' }} and ports are valid.</span></li>
+      {%- endif %}
+    </ul>
+  </section>
+
+  <section class="card span-2" aria-labelledby="history-title">
+    <h2 id="history-title">Wake history</h2>
+    {%- if history %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr><th scope="col">Time</th><th scope="col">Result</th><th scope="col">Packets</th>
+            <th scope="col">From</th><th scope="col">Details</th></tr>
+        </thead>
+        <tbody>
+          {%- for row in history %}
+          <tr>
+            <td class="when mono">{{ row.created_at|when }}</td>
+            <td>{{ chip(row.result, results[row.result]) }}</td>
+            <td class="num nowrap">{{ row.packets_sent }} of {{ row.packets_total }}</td>
+            <td class="tag">{{ 'Test' if row.source == 'test' else 'Wake button' }}{% if row.client_ip %}, <span class="mono">{{ row.client_ip }}</span>{% endif %}</td>
+            <td class="tag">{{ row.error or '' }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {%- else %}
+    <p class="empty">No wake requests yet.</p>
+    {%- endif %}
+  </section>
+
+  <section class="card span-2" aria-labelledby="events-title">
+    <div class="card-head-row">
+      <h2 id="events-title">Activity for this PC</h2>
+      <a class="link" href="{{ url_for('admin.activity_log', pc=pc.id) }}">All of it</a>
+    </div>
+    {{ event_table(events, show_pc=false, empty='Nothing yet.') }}
+  </section>
+
+  <section class="card span-2" aria-labelledby="danger-title">
+    <h2 id="danger-title">Disable or delete</h2>
+    <div class="actions">
+      <form method="post" action="{{ url_for('admin.pc_toggle', pc_id=pc.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="enabled" value="{{ '0' if pc.enabled else '1' }}">
+        {{ submit('Disable this PC' if pc.enabled else 'Enable this PC', None, 'btn btn-secondary') }}
+      </form>
+      <a class="btn btn-danger" href="{{ url_for('admin.pc_delete', pc_id=pc.id) }}">{{ icon('trash') }}Delete PC</a>
+    </div>
+    <p class="hint">Disabling keeps everything and can be undone. Deleting removes the PC and its settings; its wake history stays in the log.</p>
+  </section>
+</div>
+{% endblock %}

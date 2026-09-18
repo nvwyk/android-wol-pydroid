@@ -1,0 +1,88 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import chip, field, icon, notice, submit %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Settings</h1>
+  <p class="muted">Everything is stored in the database; there is no configuration file to edit.
+    Changes apply at once unless marked otherwise.</p>
+</div>
+{%- if errors %}
+{{ notice('error', 'Nothing was saved in that section. Check the highlighted fields.') }}
+{%- endif %}
+
+<div class="grid-2">
+  {%- for key, title, description, definitions in groups %}
+  <section class="card" id="{{ key }}" aria-labelledby="{{ key }}-title">
+    <div class="card-head">
+      <h2 id="{{ key }}-title">{{ title }}</h2>
+      <p class="muted">{{ description }}</p>
+    </div>
+    <form class="form" method="post" action="{{ url_for('admin.save_settings', group=key) }}" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {%- for item in definitions %}
+      {%- if item.kind == 'bool' %}
+      <label class="check">
+        <input type="checkbox" name="{{ item.key }}" value="1" aria-labelledby="{{ item.key }}-label"
+               {%- if item.help %} aria-describedby="{{ item.key }}-hint"{% endif %}
+               {%- if values[item.key] in (true, '1') %} checked{% endif %}>
+        <span class="check-label" id="{{ item.key }}-label">{{ item.label }}</span>
+        {%- if item.help %}<span class="hint" id="{{ item.key }}-hint">{{ item.help }}</span>{% endif %}
+      </label>
+      {%- elif item.kind == 'choice' %}
+      <div class="field">
+        <label for="{{ item.key }}">{{ item.label }}</label>
+        <select class="input" id="{{ item.key }}" name="{{ item.key }}"
+                {%- if item.help %} aria-describedby="{{ item.key }}-hint"{% endif %}>
+          {%- for value, label in item.choices %}
+          <option value="{{ value }}"{% if values[item.key] == value %} selected{% endif %}>{{ label }}</option>
+          {%- endfor %}
+        </select>
+        {%- if item.help %}<p class="hint" id="{{ item.key }}-hint">{{ item.help }}</p>{% endif %}
+      </div>
+      {%- else %}
+      {{ field(item.key, item.label ~ (' (' ~ item.unit ~ ')' if item.unit else ''),
+               values[item.key], errors, type='number', inputmode='numeric', hint=item.help,
+               min=item.minimum, max=item.maximum, cls='input mono') }}
+      {%- if item.restart %}
+      <p class="hint">{{ chip('warning', 'Needs a restart') }}
+        {%- if restart_pending %} Saved as {{ values['server_port'] }}; still listening on {{ listening_port }} until the restart.{% endif %}</p>
+      {%- endif %}
+      {%- endif %}
+      {%- endfor %}
+      <div class="form-actions">{{ submit('Save ' ~ title|lower, None, 'btn btn-secondary') }}</div>
+    </form>
+  </section>
+  {%- endfor %}
+
+  <section class="card" id="maintenance" aria-labelledby="maintenance-title">
+    <div class="card-head">
+      <h2 id="maintenance-title">Backup and restart</h2>
+      <p class="muted">A backup is a complete copy of the database: PCs, settings, history and
+        the admin password hash. Keep it private.</p>
+    </div>
+    <dl class="rows">
+      <div><dt>Database size</dt><dd>{{ database.size or 'Unknown' }}</dd></div>
+      <div><dt>Schema version</dt><dd class="num">{{ database.schema }}</dd></div>
+    </dl>
+    <div class="actions">
+      <form method="post" action="{{ url_for('admin.backup') }}" data-download>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ submit('Download backup', 'download', 'btn btn-secondary') }}
+      </form>
+      {%- if supervised %}
+      <form method="post" action="{{ url_for('admin.restart') }}" data-confirm="Restart the server now?"
+            data-confirm-detail="The page reconnects by itself. Wake buttons are unavailable for a few seconds."
+            data-confirm-button="Restart">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ submit('Restart server', 'restart', 'btn btn-quiet') }}
+      </form>
+      {%- endif %}
+    </div>
+    {%- if not supervised %}
+    <p class="hint">This server was started without launcher.py, so it cannot restart itself.
+      Stop it and start it again to apply a new port.</p>
+    {%- endif %}
+  </section>
+</div>
+{% endblock %}

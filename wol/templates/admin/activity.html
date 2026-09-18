@@ -1,0 +1,76 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import event_table %}
+{% block title %}Activity{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Activity</h1>
+  <p class="muted">Sign-ins, wake requests, changes and system events, newest first. Kept for
+    {{ setting('event_retention_days') }} days.</p>
+</div>
+
+<section class="card" aria-labelledby="filter-title">
+  <h2 id="filter-title" class="sr-only">Filter</h2>
+  <form class="filters" method="get" action="{{ url_for('admin.activity_log') }}">
+    <div class="field">
+      <label for="kind">Type</label>
+      <select class="input input-sm" id="kind" name="kind">
+        <option value="">Every type</option>
+        {%- for key, label, types in types_by_category %}
+        <optgroup label="{{ label }}">
+          <option value="{{ key }}"{% if filters.kind == key %} selected{% endif %}>All {{ label|lower }}</option>
+          {%- for type, type_label in types %}
+          <option value="{{ type }}"{% if filters.kind == type %} selected{% endif %}>{{ type_label }}</option>
+          {%- endfor %}
+        </optgroup>
+        {%- endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="pc">PC</label>
+      <select class="input input-sm" id="pc" name="pc">
+        <option value="">Every PC</option>
+        {%- for pc in pcs %}
+        <option value="{{ pc.id }}"{% if filters.pc == pc.id %} selected{% endif %}>{{ pc.name }}</option>
+        {%- endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="period">Time</label>
+      <select class="input input-sm" id="period" name="period">
+        {%- for value, label in periods %}
+        <option value="{{ value }}"{% if filters.period == value %} selected{% endif %}>{{ label }}</option>
+        {%- endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="outcome">Result</label>
+      <select class="input input-sm" id="outcome" name="outcome">
+        {%- for value, label in outcomes %}
+        <option value="{{ value }}"{% if filters.outcome == value %} selected{% endif %}>{{ label }}</option>
+        {%- endfor %}
+      </select>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" type="submit">Apply</button>
+      {%- if filtered %}
+      <a class="btn btn-quiet" href="{{ url_for('admin.activity_log') }}">Clear</a>
+      {%- endif %}
+    </div>
+  </form>
+</section>
+
+<section class="card" aria-label="Events">
+  {{ event_table(rows, show_client=true, empty=('No events match these filters.' if filtered else 'Nothing yet. Wakes, sign-ins and changes show up here.')) }}
+  {%- if page > 1 or more %}
+  <nav class="pagination" aria-label="Pages">
+    {%- if page > 1 %}
+    <a class="btn btn-secondary" href="{{ page_url(page - 1) }}">Newer</a>
+    {%- else %}<span></span>{% endif %}
+    <span class="muted">Page {{ page }}</span>
+    {%- if more %}
+    <a class="btn btn-secondary" href="{{ page_url(page + 1) }}">Older</a>
+    {%- else %}<span></span>{% endif %}
+  </nav>
+  {%- endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import chip, icon, submit %}
+{% block title %}PCs{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>PCs</h1>
+    <p class="muted">Every computer this server can wake, each with its own settings.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('admin.pc_new') }}">{{ icon('plus') }}Add PC</a>
+</div>
+
+{%- if rows %}
+<section class="card" aria-label="PC list">
+  <ul class="list">
+    {%- for row in rows %}
+    {%- set pc = row.pc %}
+    <li>
+      <div class="list-row">
+        <a class="list-title" href="{{ url_for('admin.pc_detail', pc_id=pc.id) }}">{{ pc.name }}</a>
+        {{ chip(row.status.state, row.status.label) }}
+      </div>
+      <p class="list-meta mono" translate="no">{{ pc.mac }}, {{ (pc.hosts + pc.broadcasts)|join(', ') or 'no address' }}, UDP {{ pc.ports|join(', ') or 'none' }}</p>
+      <p class="list-meta">{{ row.wakes }} wake request{{ '' if row.wakes == 1 else 's' }} kept{% if pc.description %}. {{ pc.description }}{% endif %}</p>
+      {%- if row.problems %}
+      <p class="pc-problem">{{ row.problems[0] }}</p>
+      {%- endif %}
+      <div class="actions">
+        <a class="btn btn-secondary" href="{{ url_for('admin.pc_edit', pc_id=pc.id) }}">{{ icon('edit') }}Edit</a>
+        <form method="post" action="{{ url_for('admin.pc_test', pc_id=pc.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {{ submit('Send test packet', 'send', 'btn btn-quiet') }}
+        </form>
+        <form method="post" action="{{ url_for('admin.pc_toggle', pc_id=pc.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enabled" value="{{ '0' if pc.enabled else '1' }}">
+          <input type="hidden" name="back" value="list">
+          {{ submit('Disable' if pc.enabled else 'Enable', None, 'btn btn-quiet') }}
+        </form>
+      </div>
+    </li>
+    {%- endfor %}
+  </ul>
+</section>
+{%- else %}
+<section class="card empty-state" aria-labelledby="empty-title">
+  <span class="device-icon">{{ icon('desktop') }}</span>
+  <h2 id="empty-title">No PCs yet</h2>
+  <p class="muted">Add a PC with the MAC address of its network adapter and your network's
+    broadcast address. The Wake page gets a button for it straight away.</p>
+  <a class="btn btn-primary" href="{{ url_for('admin.pc_new') }}">{{ icon('plus') }}Add your first PC</a>
+</section>
+{%- endif %}
+{% endblock %}

@@ -1,0 +1,102 @@
+{% extends "layout.html" %}
+{% from "macros.html" import chip %}
+{% block title %}Status{% endblock %}
+{% block description %}Public status of this Wake-on-LAN server: whether it is up, its uptime and its wake activity.{% endblock %}
+{% block shell_class %}shell-form{% endblock %}
+{% block content %}
+{%- set wol = data.wake_on_lan %}
+<div class="stack" data-live="{{ url_for('main.status_json', view='live') }}" data-interval="{{ refresh }}">
+  <div class="card-head">
+    <h1>Status</h1>
+    <p class="muted">Public page. Anyone who can reach this address can read it.</p>
+  </div>
+
+  <section class="card" aria-labelledby="server-title">
+    <div class="card-head-row">
+      <h2 id="server-title">Server</h2>
+      {{ chip('online', 'Online') }}
+    </div>
+    <dl class="rows">
+      {%- if data.version %}
+      <div><dt>Version</dt><dd class="mono" translate="no">{{ data.version.app }} (build {{ data.version.build or 'dev' }})</dd></div>
+      {%- endif %}
+      <div><dt>Uptime</dt><dd data-text="uptime">{{ data.server.uptime_seconds|duration }}</dd></div>
+      <div><dt>Started</dt><dd>{{ data.server.started_at|when }}</dd></div>
+      <div><dt>Server time</dt><dd class="num" data-text="server-time">{{ data.server.time|clock }}</dd></div>
+      <div><dt>Database</dt><dd>{{ chip('ok', 'Healthy') }}</dd></div>
+      {%- if data.internet %}
+      <div>
+        <dt>Internet</dt>
+        <dd>
+          {%- set state = {'online': 'online', 'offline': 'failed'}.get(data.internet.status, 'unknown') %}
+          {{ chip(state, {'online': 'Reachable', 'offline': 'Unreachable', 'unknown': 'Checking', 'off': 'Not checked'}[data.internet.status], 'internet') }}
+        </dd>
+      </div>
+      {%- endif %}
+      {%- if data.version %}
+      <div>
+        <dt>Automatic updates</dt>
+        <dd>{% if data.version.automatic_updates %}On{% elif data.version.supervised %}Off{% else %}Not running under launcher.py{% endif %}</dd>
+      </div>
+      {%- if data.version.last_update_check %}
+      <div><dt>Last update check</dt><dd>{{ data.version.last_update_check|when }}</dd></div>
+      {%- endif %}
+      {%- endif %}
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="wol-title">
+    <div class="card-head-row">
+      <h2 id="wol-title">Wake-on-LAN</h2>
+      {%- if wol.service == 'ready' %}
+      {{ chip('ok', 'Ready') }}
+      {%- else %}
+      {{ chip('unknown', 'No PCs configured' if wol.service == 'no_pcs' else 'Every PC is disabled') }}
+      {%- endif %}
+    </div>
+    <dl class="rows">
+      <div><dt>PCs</dt><dd>{{ wol.pcs_configured }} configured, {{ wol.pcs_enabled }} enabled</dd></div>
+      <div>
+        <dt>Online now</dt>
+        <dd data-text="pcs-online">{% if wol.pcs_online is none %}Not checked{% else %}{{ wol.pcs_online }} of {{ wol.pcs_enabled }}{% endif %}</dd>
+      </div>
+      {%- if wol.requests_total is defined %}
+      <div><dt>Wake requests</dt><dd class="num" data-text="requests-total">{{ wol.requests_total }}</dd></div>
+      <div><dt>In the last 24 hours</dt><dd class="num" data-text="requests-day">{{ wol.requests_last_24h }}</dd></div>
+      <div>
+        <dt>Last request</dt>
+        <dd>
+          {%- if wol.last_request_at %}
+          <span data-text="last-request">{{ wol.last_request_at|clock }}</span>
+          {{ chip(wol.last_request_result, results.get(wol.last_request_result, wol.last_request_result), 'last-result') }}
+          {%- else %}<span data-text="last-request">None yet</span>{% endif %}
+        </dd>
+      </div>
+      <div><dt>Last successful request</dt><dd data-text="last-success">{% if wol.last_success_at %}{{ wol.last_success_at|clock }}{% else %}None yet{% endif %}</dd></div>
+      {%- endif %}
+    </dl>
+    {%- if data.pcs %}
+    <ul class="list" aria-label="PCs">
+      {%- for pc in data.pcs %}
+      <li class="list-row">
+        <span class="list-title">{{ pc.name }}</span>
+        {{ chip(pc.status, {'online': 'Online', 'unreachable': 'Unreachable', 'waking': 'Waiting for reply', 'disabled': 'Disabled'}.get(pc.status, 'Unknown'), 'pc-%d'|format(loop.index)) }}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    <p class="hint">A sent wake packet does not mean a PC is on. A PC counts as online only after it answers a check.</p>
+  </section>
+
+  {%- if data.device %}
+  <section class="card" aria-labelledby="device-title">
+    <h2 id="device-title">Device</h2>
+    <dl class="rows">
+      {%- for item in data.device %}
+      <div><dt>{{ item.label }}</dt><dd class="num" data-text="device-{{ item.label|lower|replace(' ', '-') }}">{{ item.value }}</dd></div>
+      {%- endfor %}
+    </dl>
+  </section>
+  {%- endif %}
+</div>
+{% endblock %}

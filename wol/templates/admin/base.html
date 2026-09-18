@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+{% from "macros.html" import icon %}
+{% block before_messages %}
+<nav class="subnav" aria-label="Admin sections">
+  {%- for endpoint, label, icon_name, match in [
+        ('admin.overview', 'Overview', 'overview', ('admin.overview',)),
+        ('admin.pcs_list', 'PCs', 'desktop', ('admin.pc',)),
+        ('admin.activity_log', 'Activity', 'activity', ('admin.activity_log',)),
+        ('admin.security', 'Security', 'security', ('admin.security', 'admin.change_password', 'admin.revoke_sessions')),
+        ('admin.settings_page', 'Settings', 'settings', ('admin.settings_page', 'admin.save_settings'))] %}
+  <a href="{{ url_for(endpoint) }}"{% if request.endpoint and request.endpoint.startswith(match) %} aria-current="page"{% endif %}>
+    {{- icon(icon_name) }}{{ label }}</a>
+  {%- endfor %}
+</nav>
+{% endblock %}

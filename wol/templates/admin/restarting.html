@@ -1,0 +1,19 @@
+{% extends "layout.html" %}
+{% block title %}Restarting{% endblock %}
+{% block shell_class %}shell-narrow{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="page-title" data-restart-health="{{ health }}"
+         data-restart-target="{{ target }}">
+  <div class="card-head">
+    <h1 id="page-title">Restarting</h1>
+    <p class="muted" data-restart-status role="status">The server is restarting. This page
+      continues by itself as soon as it answers again, usually within a few seconds.</p>
+  </div>
+  {%- if port_changed %}
+  <p>It now listens on port {{ port }}. If this page does not move on, open
+    <a class="link mono" href="{{ target }}">{{ target }}</a>.</p>
+  {%- else %}
+  <p><a class="link" href="{{ target }}">Back to the overview</a></p>
+  {%- endif %}
+</section>
+{% endblock %}

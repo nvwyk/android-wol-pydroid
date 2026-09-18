@@ -1,0 +1,6 @@
+# WOL Controller runs on Python 3.7 or newer.
+flask>=1.1
+# Recommended, not required. Without it a built-in bcrypt is used (slower, lower cost).
+# On Pydroid 3 this often fails to build (bcrypt 4+ needs Rust); try "bcrypt<4" there,
+# or skip it. See "About bcrypt on Pydroid 3" in the README.
+bcrypt>=3.1

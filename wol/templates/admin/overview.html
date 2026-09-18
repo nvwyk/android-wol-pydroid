@@ -1,0 +1,113 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import chip, event_table, icon, notice, stat, submit %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p class="muted">How this server and its PCs are doing.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="{{ url_for('admin.pc_new') }}">{{ icon('plus') }}Add PC</a>
+    {%- if setting('public_status_enabled') %}
+    <a class="btn btn-quiet" href="{{ url_for('main.status') }}">{{ icon('globe') }}Public status</a>
+    {%- endif %}
+  </div>
+</div>
+
+{%- for kind, message in notices %}
+{{ notice(kind, message) }}
+{%- endfor %}
+{%- if restart_pending and supervised %}
+<form method="post" action="{{ url_for('admin.restart') }}" data-confirm="Restart the server now?"
+      data-confirm-detail="The page reconnects by itself. Wake buttons are unavailable for a few seconds."
+      data-confirm-button="Restart">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {{ submit('Restart to apply', 'restart', 'btn btn-secondary') }}
+</form>
+{%- endif %}
+
+<div class="tiles tiles-4">
+  {{ stat('PCs', pcs_total, '%d enabled'|format(pcs_enabled)) }}
+  {{ stat('Online now', pcs_online if setting('status_checks_enabled') else 'Off', 'answered the last check' if setting('status_checks_enabled') else 'checks are off') }}
+  {{ stat('Wake requests', wol.total, '%d in the last 24 h'|format(wol.last_day)) }}
+  {{ stat('Server uptime', uptime, 'since ' ~ started) }}
+</div>
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="server-title">
+    <h2 id="server-title">Server</h2>
+    <dl class="rows">
+      {%- for label, value in server %}
+      <div{% if value|string|length > 30 %} class="stacked"{% endif %}><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+      {%- endfor %}
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="wol-title">
+    <h2 id="wol-title">Wake-on-LAN</h2>
+    <dl class="rows">
+      <div><dt>Requests kept</dt><dd class="num">{{ wol.total }}</dd></div>
+      <div><dt>Sent in full</dt><dd class="num">{{ wol.sent }}</dd></div>
+      <div><dt>Partly sent</dt><dd class="num">{{ wol.partial }}</dd></div>
+      <div><dt>Failed</dt><dd class="num">{{ wol.failed }}</dd></div>
+      <div>
+        <dt>Last request</dt>
+        <dd>
+          {%- if wol.last %}{{ wol.last.created_at|when }}, {{ wol.last.pc_name }}
+          {{ chip(wol.last.result, {'sent': 'Sent', 'partial': 'Partly sent', 'failed': 'Failed'}[wol.last.result]) }}
+          {%- else %}None yet{% endif %}
+        </dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="db-title">
+    <div class="card-head-row">
+      <h2 id="db-title">Database</h2>
+      {%- if database.integrity %}{{ chip('error', 'Problem found') }}{% else %}{{ chip('ok', 'Healthy') }}{% endif %}
+    </div>
+    <dl class="rows">
+      <div class="stacked"><dt>File</dt><dd class="mono" translate="no">{{ database.path }}</dd></div>
+      <div><dt>Size</dt><dd>{{ database.size or 'Unknown' }}</dd></div>
+      <div><dt>Schema version</dt><dd class="num">{{ database.schema }}</dd></div>
+      <div><dt>Events kept</dt><dd class="num">{{ database.events }}</dd></div>
+    </dl>
+    <form method="post" action="{{ url_for('admin.backup') }}" data-download>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ submit('Download backup', 'download', 'btn btn-secondary') }}
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="launcher-title">
+    <div class="card-head-row">
+      <h2 id="launcher-title">Launcher and updates</h2>
+      {%- if not supervised %}{{ chip('unknown', 'Not supervised') }}
+      {%- elif generation == 1 %}{{ chip('warning', 'Old launcher') }}
+      {%- elif setting('updates_enabled') %}{{ chip('ok', 'Updates on') }}
+      {%- else %}{{ chip('unknown', 'Updates paused') }}{% endif %}
+    </div>
+    <dl class="rows">
+      <div><dt>Watchdog</dt><dd>{{ 'launcher.py restarts the server if it stops' if supervised else 'Off: started without launcher.py' }}</dd></div>
+      {%- if supervised %}
+      <div><dt>Installed commit</dt><dd class="mono">{{ launcher.app_commit or 'Not recorded yet' }}</dd></div>
+      <div><dt>Last update check</dt><dd>{% if launcher.last_check_at %}{{ launcher.last_check_at|when }}{% else %}Not yet{% endif %}</dd></div>
+      {%- if launcher.last_check_result %}
+      <div class="stacked"><dt>Result</dt><dd>{{ launcher.last_check_result }}</dd></div>
+      {%- endif %}
+      {%- if launcher.last_update_at %}
+      <div><dt>Last update installed</dt><dd>{{ launcher.last_update_at|when }}</dd></div>
+      {%- endif %}
+      {%- endif %}
+    </dl>
+  </section>
+
+  <section class="card span-2" aria-labelledby="recent-title">
+    <div class="card-head-row">
+      <h2 id="recent-title">Recent activity</h2>
+      <a class="link" href="{{ url_for('admin.activity_log') }}">All activity</a>
+    </div>
+    {{ event_table(recent, empty='Nothing yet. Wakes, sign-ins and changes show up here.') }}
+  </section>
+</div>
+{% endblock %}

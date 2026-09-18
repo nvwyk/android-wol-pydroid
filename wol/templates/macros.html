@@ -1,0 +1,134 @@
+{% macro icon(name, cls="icon") -%}
+<svg class="{{ cls }}" aria-hidden="true" focusable="false"><use href="#i-{{ name }}"></use></svg>
+{%- endmacro %}
+
+{% macro notice(kind, message) -%}
+<div class="notice notice-{{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}">
+  {{ icon(kind if kind in ('success', 'warning', 'error') else 'info') }}
+  <p>{{ message }}</p>
+</div>
+{%- endmacro %}
+
+{# A status chip. The dot repeats what the words say, it never replaces them. #}
+{% macro chip(state, label, key=None) -%}
+<span class="chip chip-{{ state }}"{% if key %} data-chip="{{ key }}"{% endif %}>
+  <span class="chip-dot" aria-hidden="true"></span><span data-chip-label>{{ label }}</span>
+</span>
+{%- endmacro %}
+
+{# A button that shows a spinner in place of its icon while its form is on its way. #}
+{% macro submit(label, icon_name=None, cls="btn btn-primary", extra="") -%}
+<button class="{{ cls }}" type="submit" {{ extra }}>
+  {%- if icon_name %}
+  <span class="btn-icon" aria-hidden="true">{{ icon(icon_name) }}<span class="spinner"></span></span>
+  {%- endif %}
+  {{ label }}
+</button>
+{%- endmacro %}
+
+{# Label above, hint and error below, wired together for screen readers. #}
+{% macro field(name, label, value="", errors={}, type="text", hint="", required=false,
+               autocomplete=None, inputmode=None, placeholder=None, cls="input", optional=false,
+               autofocus=false, spellcheck=None, min=None, max=None, unit=None) -%}
+<div class="field">
+  <label for="{{ name }}">{{ label }}{% if optional %} <span class="optional">(optional)</span>{% endif %}</label>
+  <input class="{{ cls }}" id="{{ name }}" name="{{ name }}" type="{{ type }}"
+         {%- if type != 'password' %} value="{{ value if value is not none else '' }}"{% endif %}
+         {%- if required %} required{% endif %}
+         {%- if autofocus %} autofocus{% endif %}
+         {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
+         {%- if inputmode %} inputmode="{{ inputmode }}"{% endif %}
+         {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
+         {%- if spellcheck is not none %} spellcheck="{{ spellcheck }}"{% endif %}
+         {%- if min is not none %} min="{{ min }}"{% endif %}
+         {%- if max is not none %} max="{{ max }}"{% endif %}
+         {%- if hint or errors.get(name) %} aria-describedby="{% if hint %}{{ name }}-hint{% endif %}{% if errors.get(name) %} {{ name }}-error{% endif %}"{% endif %}
+         {%- if errors.get(name) %} aria-invalid="true"{% endif %}>
+  {%- if hint %}
+  <p class="hint" id="{{ name }}-hint">{{ hint }}{% if unit %} In {{ unit }}.{% endif %}</p>
+  {%- endif %}
+  {%- if errors.get(name) %}
+  <p class="field-error" id="{{ name }}-error">{{ errors[name] }}</p>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{# One live figure: a trend gets a sparkline, a share of a limit gets a meter. #}
+{% macro tile(item) -%}
+<div class="tile{% if item.level %} level-{{ item.level }}{% endif %}"
+     {%- if item.level %} data-level="{{ item.key }}"{% endif %}>
+  <p class="tile-label">{{ item.label }}</p>
+  <p class="tile-value" data-text="{{ item.key }}">{{ item.value }}</p>
+  {%- if item.spark %}
+  <svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img"
+       aria-label="{{ item.alt }}" data-spark="{{ item.key }}">
+    <title>{{ item.alt }}</title>
+    <polygon class="spark-area" points="0,28 {{ item.spark.line }} 100,28"></polygon>
+    <polyline class="spark-line" points="{{ item.spark.line }}"></polyline>
+    <polyline class="spark-now" points="{{ item.spark.now }}"></polyline>
+  </svg>
+  {%- else %}
+  <progress class="meter" max="100" value="{{ item.meter }}" aria-label="{{ item.label }}"
+            data-meter="{{ item.key }}"></progress>
+  {%- endif %}
+  <p class="tile-detail">
+    {{ icon('warning') }}
+    <span data-text="{{ item.key }}-detail">{{ item.detail }}</span>
+  </p>
+</div>
+{%- endmacro %}
+
+{# A plain figure tile for counts. #}
+{% macro stat(label, value, detail="", key=None) -%}
+<div class="tile">
+  <p class="tile-label">{{ label }}</p>
+  <p class="tile-value"{% if key %} data-text="{{ key }}"{% endif %}>{{ value }}</p>
+  {%- if detail %}
+  <p class="tile-detail"><span>{{ detail }}</span></p>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{# Label and value rows. A value too long to sit beside its label stacks under it. #}
+{% macro rows(entries, prose=[]) -%}
+<dl class="rows">
+  {%- for label, key, value in entries %}
+  <div{% if value|string|length > 26 %} class="stacked"{% endif %}>
+    <dt>{{ label }}</dt>
+    <dd{% if label not in prose %} class="mono num" translate="no"{% endif %}
+        {%- if key %} data-text="{{ key }}"{% endif %}>{{ value }}</dd>
+  </div>
+  {%- endfor %}
+</dl>
+{%- endmacro %}
+
+{# Events as a table: time, what happened, and optionally the PC and address. #}
+{% macro event_table(rows, show_pc=true, show_client=false, empty="Nothing yet.") -%}
+{%- if rows %}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Time</th>
+        <th scope="col">Event</th>
+        {%- if show_client %}<th scope="col">From</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {%- for row in rows %}
+      <tr class="{% if row.level == 'warning' %}is-warning{% elif row.level == 'error' %}is-error{% endif %}">
+        <td class="when mono">{{ row.created_at|when }}</td>
+        <td class="what">
+          <span class="line">{{ row.message }}</span>
+          <span class="tag">{{ row.type|event_label }}{% if show_pc and row.pc_name %}, {{ row.pc_name }}{% endif %}</span>
+        </td>
+        {%- if show_client %}<td class="mono tag">{{ row.client_ip or '' }}</td>{% endif %}
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</div>
+{%- else %}
+<p class="empty">{{ empty }}</p>
+{%- endif %}
+{%- endmacro %}

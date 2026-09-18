@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+{% from "macros.html" import chip, icon %}
+{% block title %}Wake{% endblock %}
+{% block content %}
+<div class="stack" data-live="{{ url_for('main.dashboard_json') }}" data-interval="{{ refresh }}"
+     data-layout="{{ layout }}">
+  <div class="page-head">
+    <div>
+      <h1>Your PCs</h1>
+      {%- if cards %}
+      <p class="muted" data-text="online-summary">{{ summary }}</p>
+      {%- endif %}
+    </div>
+    {%- if cards %}
+    <a class="btn btn-secondary" href="{{ url_for('admin.pc_new') }}">{{ icon('plus') }}Add PC</a>
+    {%- endif %}
+  </div>
+
+  {%- if not cards %}
+  <section class="card empty-state" aria-labelledby="empty-title">
+    <span class="device-icon">{{ icon('desktop') }}</span>
+    <h2 id="empty-title">No PCs yet</h2>
+    <p class="muted">Add the computer you want to wake: a name, the MAC address of its
+      network adapter and your network's broadcast address. It takes a minute.</p>
+    <a class="btn btn-primary" href="{{ url_for('admin.pc_new') }}">{{ icon('plus') }}Add your first PC</a>
+  </section>
+  {%- else %}
+  <div class="pc-grid{% if cards|length > 2 %} pc-grid-3{% endif %}">
+    {%- for card in cards %}
+    {%- set pc = card.pc %}
+    {%- set key = 'pc-%d'|format(pc.id) %}
+    <article class="card pc{% if not pc.enabled %} is-disabled{% endif %}" id="{{ key }}"
+             aria-labelledby="{{ key }}-name">
+      <div class="pc-head">
+        <span class="device-icon">{{ icon('desktop') }}</span>
+        <div class="pc-title">
+          <h2 id="{{ key }}-name">{{ pc.name }}</h2>
+          <p class="pc-meta mono" translate="no">{{ pc.mac }}</p>
+          {{ chip(card.status.state, card.status.label, key) }}
+        </div>
+      </div>
+      <p class="pc-targets mono" translate="no">{{ card.targets }}</p>
+      {%- if card.problem %}
+      <p class="pc-problem">{{ card.problem }}</p>
+      {%- endif %}
+      <form method="post" action="{{ url_for('main.wake_pc', pc_id=pc.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary btn-xl" type="submit" aria-label="Wake {{ pc.name }}"
+                {%- if not pc.enabled %} disabled{% endif %}>
+          <span class="btn-icon" aria-hidden="true">{{ icon('power') }}<span class="spinner"></span></span>
+          Wake
+        </button>
+      </form>
+      <dl class="stats">
+        <div>
+          <dt>Last wake</dt>
+          <dd data-text="{{ key }}-last-wake">{% if card.last_wake_at %}{{ card.last_wake_at|clock }}{% else %}Never{% endif %}</dd>
+        </div>
+        <div>
+          <dt>Wake requests</dt>
+          <dd data-text="{{ key }}-wakes">{{ card.wakes }}</dd>
+        </div>
+        <div>
+          <dt>Last seen</dt>
+          <dd data-text="{{ key }}-last-seen">{{ last_seen(pc, card.status) }}</dd>
+        </div>
+      </dl>
+      <p class="pc-note" data-text="{{ key }}-detail">{{ card.status.detail }}</p>
+    </article>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+</div>
+{% endblock %}

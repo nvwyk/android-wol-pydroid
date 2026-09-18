@@ -1,0 +1,32 @@
+{% extends "layout.html" %}
+{% from "macros.html" import tile, rows %}
+{% block title %}System{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="page-title" data-live="{{ url_for('main.system_json') }}"
+         data-interval="{{ poll_interval }}" data-ready="{{ 1 if snapshot.ready else 0 }}">
+  <div class="card-head">
+    <h1 id="page-title">System</h1>
+    {%- if snapshot.ready %}
+    <p class="muted">Load on the device running this server.
+      Updated <span data-text="updated">{{ snapshot.text.updated }}</span>.</p>
+    {%- else %}
+    <p class="muted">Collecting the first sample. The figures appear in a moment.</p>
+    {%- endif %}
+  </div>
+  {%- if snapshot.tiles %}
+  <div class="tiles tiles-4">
+    {%- for item in snapshot.tiles %}
+    {{ tile(item) }}
+    {%- endfor %}
+  </div>
+  {%- endif %}
+  <div class="grid-2">
+  {%- for title, entries in groups %}
+  <div class="group">
+    <h2>{{ title }}</h2>
+    {{ rows(entries, prose=['Operating system', 'Processor', 'Auto-update', 'Version']) }}
+  </div>
+  {%- endfor %}
+  </div>
+</section>
+{% endblock %}

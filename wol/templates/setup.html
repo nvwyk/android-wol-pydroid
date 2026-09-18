@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+{% from "macros.html" import field, icon, notice, submit %}
+{% block title %}Set up{% endblock %}
+{% block shell_class %}shell-form{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Set up {{ app_name }}</h1>
+  <p class="muted">Create the admin password{% if not imported %} and add the first PC you want to
+    wake{% endif %}. Everything can be changed later in Admin.</p>
+</div>
+
+{%- if imported %}
+{{ notice('info', 'Your settings from config.json were imported, including ' ~ imported|map(attribute='name')|join(', ') ~ '. Its password could not be carried over, so choose a new one to finish.') }}
+{%- endif %}
+{%- if errors %}
+{{ notice('error', 'Setup is not finished yet. Check the highlighted fields below.') }}
+{%- endif %}
+
+<form class="card form" method="post" action="{{ url_for('main.setup') }}" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="text" name="username" value="WOL Controller" autocomplete="username" hidden>
+
+  <fieldset class="fieldset">
+    <legend>Setup code</legend>
+    {{ field('code', 'Code from the console', form.get('code', ''), errors, required=true,
+             autocomplete='off', spellcheck='false', cls='input code', placeholder='ABCD-EFGH',
+             autofocus=not errors or errors.get('code'),
+             hint='The Pydroid console where the server runs shows it. It stops anyone else on your network from claiming this server before you do.') }}
+  </fieldset>
+
+  <fieldset class="fieldset">
+    <legend>Admin password</legend>
+    {{ field('password', 'Password', type='password', errors=errors, required=true,
+             autocomplete='new-password',
+             hint='At least %d characters. It is stored only as a bcrypt password hash.'|format(min_length)) }}
+    {{ field('confirm', 'Repeat the password', type='password', required=true, autocomplete='new-password') }}
+  </fieldset>
+
+  {%- if not imported %}
+  <fieldset class="fieldset">
+    <legend>First PC</legend>
+    <label class="check">
+      <input type="checkbox" name="add_pc" value="1" data-reveals="first-pc"
+             aria-labelledby="add_pc-label" aria-describedby="add_pc-hint"{% if form.get('add_pc') %} checked{% endif %}>
+      <span class="check-label" id="add_pc-label">Add a PC now</span>
+      <span class="hint" id="add_pc-hint">You can also skip this and add PCs in Admin afterwards.</span>
+    </label>
+    <div class="fieldset" id="first-pc">
+      {{ field('name', 'Name', form.get('name', ''), errors, placeholder='Office PC', autocomplete='off') }}
+      {{ field('mac', 'MAC address', form.get('mac', ''), errors, placeholder='24-4B-FE-07-0C-E2',
+               autocomplete='off', spellcheck='false', cls='input mono',
+               hint="On Windows, ipconfig /all lists it as Physical Address. On Linux, ip link shows it.") }}
+      <div class="field-row">
+        {{ field('broadcasts', 'Broadcast address', form.get('broadcasts', ''), errors,
+                 placeholder='192.168.1.255', inputmode='decimal', autocomplete='off', cls='input mono',
+                 hint='Your network address ending in .255. This is what reaches a sleeping PC.') }}
+        {{ field('hosts', "PC's IP address", form.get('hosts', ''), errors, optional=true,
+                 placeholder='192.168.1.25', inputmode='decimal', autocomplete='off', cls='input mono',
+                 hint='Used to show whether the PC is on.') }}
+      </div>
+      {{ field('ports', 'UDP ports', form.get('ports', '9'), errors, inputmode='numeric',
+               autocomplete='off', cls='input mono',
+               hint='Separate several with commas. 9 is the standard; some PCs also listen on 7.') }}
+      {%- if errors.get('status_method') %}
+      <p class="field-error">{{ errors.status_method }}</p>
+      {%- endif %}
+    </div>
+  </fieldset>
+  {%- endif %}
+
+  <div class="form-actions">
+    {{ submit('Finish setup', 'success', 'btn btn-primary btn-lg') }}
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import icon, submit %}
+{% block title %}Delete {{ pc.name }}{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('admin.pc_detail', pc_id=pc.id) }}">{{ icon('back') }}{{ pc.name }}</a>
+<section class="card" aria-labelledby="page-title">
+  <div class="card-head">
+    <h1 id="page-title">Delete {{ pc.name }}?</h1>
+    <p class="muted">This removes the PC, its MAC address, addresses, ports and check settings. It
+      cannot be undone.</p>
+  </div>
+  <dl class="rows">
+    <div><dt>MAC address</dt><dd class="mono" translate="no">{{ pc.mac }}</dd></div>
+    <div><dt>Wake requests in the history</dt><dd class="num">{{ kept }}</dd></div>
+  </dl>
+  <p class="hint">The history and activity log keep their entries under the name {{ pc.name }}.
+    Nothing else is deleted: other PCs, settings and the admin account are untouched. To stop
+    using it for a while instead, disable it.</p>
+  <form class="form-actions" method="post" action="{{ url_for('admin.pc_delete', pc_id=pc.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ submit('Delete ' ~ pc.name, 'trash', 'btn btn-danger') }}
+    <a class="btn btn-quiet" href="{{ url_for('admin.pc_detail', pc_id=pc.id) }}">Keep it</a>
+  </form>
+</section>
+{% endblock %}

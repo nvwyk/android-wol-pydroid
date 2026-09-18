@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% from "macros.html" import icon %}
+{% block title %}{{ title }}{% endblock %}
+{% block shell_class %}shell-narrow{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="page-title">
+  <div class="card-head">
+    <p class="mono muted">Error {{ code }}</p>
+    <h1 id="page-title">{{ title }}</h1>
+    <p class="muted">{{ message }}</p>
+  </div>
+  {%- if code != 503 %}
+  <a class="btn btn-secondary btn-lg" href="{{ url_for('main.dashboard') }}">{{ icon('back') }}Back to your PCs</a>
+  {%- endif %}
+</section>
+{% endblock %}

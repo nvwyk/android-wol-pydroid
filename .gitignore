@@ -1,6 +1,20 @@
+# Device data: created on the device, never committed, never touched by updates.
+wol.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.pre-update
 config.json
+config.json.*
 state.json
+
+# launcher.py working folders and leftovers
+.backup/
+.backup.tmp/
+.update/
 *.bak
 *.tmp
+
 __pycache__/
 workspace/docs/*

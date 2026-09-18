@@ -1,0 +1,94 @@
+{% extends "admin/base.html" %}
+{% from "macros.html" import field, icon, notice, submit %}
+{% block title %}{{ 'Edit ' ~ pc.name if pc else 'Add a PC' }}{% endblock %}
+{% block content %}
+{%- if pc %}
+<a class="back" href="{{ url_for('admin.pc_detail', pc_id=pc.id) }}">{{ icon('back') }}{{ pc.name }}</a>
+{%- else %}
+<a class="back" href="{{ url_for('admin.pcs_list') }}">{{ icon('back') }}PCs</a>
+{%- endif %}
+<div class="card-head">
+  <h1>{{ 'Edit ' ~ pc.name if pc else 'Add a PC' }}</h1>
+  <p class="muted">Wake packets for this PC go only to the addresses and ports below.</p>
+</div>
+{%- if errors %}
+{{ notice('error', 'Nothing was saved. Check the highlighted fields below.') }}
+{%- endif %}
+
+<form class="card form" method="post" novalidate
+      action="{{ url_for('admin.pc_edit', pc_id=pc.id) if pc else url_for('admin.pc_new') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <fieldset class="fieldset">
+    <legend>Name</legend>
+    {{ field('name', 'Name', form.get('name', ''), errors, required=true, placeholder='Office PC',
+             autocomplete='off', autofocus=not pc) }}
+    <div class="field">
+      <label for="description">Notes <span class="optional">(optional)</span></label>
+      <textarea class="input" id="description" name="description" rows="2" maxlength="500"
+                {%- if errors.get('description') %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ form.get('description', '') }}</textarea>
+      {%- if errors.get('description') %}<p class="field-error" id="description-error">{{ errors.description }}</p>{% endif %}
+    </div>
+  </fieldset>
+
+  <fieldset class="fieldset">
+    <legend>Wake-on-LAN</legend>
+    {{ field('mac', 'MAC address', form.get('mac', ''), errors, required=true,
+             placeholder='24-4B-FE-07-0C-E2', autocomplete='off', spellcheck='false', cls='input mono',
+             hint="The network adapter's hardware address. On Windows, ipconfig /all lists it as Physical Address; on Linux, ip link shows it.") }}
+    <div class="field-row">
+      {{ field('broadcasts', 'Broadcast addresses', form.get('broadcasts', ''), errors,
+               placeholder='192.168.1.255', inputmode='decimal', autocomplete='off', cls='input mono',
+               hint='Your network address ending in .255. This reaches a sleeping PC most reliably.') }}
+      {{ field('hosts', "PC's IP addresses", form.get('hosts', ''), errors,
+               placeholder='192.168.1.25', inputmode='decimal', autocomplete='off', cls='input mono',
+               hint='Also sent a packet, and used for the reachability check below.') }}
+    </div>
+    {{ field('ports', 'UDP ports', form.get('ports', ''), errors, required=true, inputmode='numeric',
+             autocomplete='off', cls='input mono',
+             hint='Separate several addresses or ports with commas. Every address gets a packet on every port. 9 is the standard port.') }}
+  </fieldset>
+
+  <fieldset class="fieldset">
+    <legend>Reachability check</legend>
+    <p class="hint">Shows whether the PC is on. It is separate from waking: a sent packet never marks a PC as online.</p>
+    <div class="choices" role="radiogroup" aria-label="Check method">
+      {%- for value, label in status_methods %}
+      <label class="check">
+        <input type="radio" name="status_method" value="{{ value }}" data-reveals="tcp-port" data-reveals-when="tcp"
+               aria-labelledby="method-{{ value }}-label" aria-describedby="method-{{ value }}-hint"
+               {%- if form.get('status_method', 'ping') == value %} checked{% endif %}>
+        <span class="check-label" id="method-{{ value }}-label">{{ label }}</span>
+        <span class="hint" id="method-{{ value }}-hint">
+          {%- if value == 'ping' %}One ping to the PC's IP address per check. Windows answers ping only if its firewall allows it.
+          {%- elif value == 'tcp' %}Connects to a TCP port on the PC, such as 3389 (Remote Desktop), 445 (file sharing) or 22 (SSH).
+          {%- else %}Never probe this PC. Its status shows as not checked.{% endif -%}
+        </span>
+      </label>
+      {%- endfor %}
+    </div>
+    {%- if errors.get('status_method') %}
+    <p class="field-error">{{ errors.status_method }}</p>
+    {%- endif %}
+    <div id="tcp-port">
+      {{ field('status_port', 'TCP port to probe', form.get('status_port', ''), errors,
+               inputmode='numeric', autocomplete='off', cls='input mono', placeholder='3389') }}
+    </div>
+  </fieldset>
+
+  <fieldset class="fieldset">
+    <legend>Availability</legend>
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" aria-labelledby="enabled-label"
+             aria-describedby="enabled-hint"{% if form.get('enabled') %} checked{% endif %}>
+      <span class="check-label" id="enabled-label">Enabled</span>
+      <span class="hint" id="enabled-hint">A disabled PC keeps its settings and history, but has no Wake button and is not checked.</span>
+    </label>
+  </fieldset>
+
+  <div class="form-actions">
+    {{ submit('Save changes' if pc else 'Add PC', 'success') }}
+    <a class="btn btn-quiet" href="{{ url_for('admin.pc_detail', pc_id=pc.id) if pc else url_for('admin.pcs_list') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}
