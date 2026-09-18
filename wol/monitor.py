@@ -2,7 +2,8 @@
 history cleanup and the launcher watch.
 
 PC reachability is kept separate from Wake-on-LAN on purpose. A PC is only called
-online after it answered a ping or a TCP probe, never because a packet was sent to it.
+online after it answered a ping, ARP with its own MAC address, or a TCP probe, never
+because a wake packet was sent to it.
 After a wake request the PC is probed every 10 seconds for three minutes, so the
 dashboard can show it coming up; otherwise one probe per PC per interval (a minute by
 default) keeps the load on the network negligible.
@@ -32,6 +33,7 @@ _watch_until = {}                   # pc_id -> monotonic deadline of fast checks
 _woken_at = {}                      # pc_id -> monotonic time of the last sent wake packet
 _pc_list = [0.0, None]              # [loaded at (monotonic), list of PCs]
 _tick = threading.Event()
+last_round = {}                     # at, pcs, seconds of the latest round that probed a PC
 
 
 # --- Probes -----------------------------------------------------------------
@@ -73,6 +75,112 @@ def tcp_probe(address, port, timeout=2.0):
         return False, "No answer on TCP %d (%s)" % (port, e.strerror or e)
 
 
+# --- Neighbour table (ARP) --------------------------------------------------------
+#
+# Windows drops ping on networks it calls Public, and many PCs firewall every TCP port,
+# but no PC can ignore ARP: it has to answer "who has 192.168.1.25?" to be on the network
+# at all. The kernel keeps the answers in its neighbour table, and Android up to version 9
+# lets apps read it. A table entry only counts when it carries this PC's own MAC address,
+# so another device that took over the IP address is never mistaken for the PC.
+
+ARP_SETTLE = 9.0        # Linux re-verifies a cached entry within 5 s delay + 3 probes of 1 s
+ARP_POLL = 0.5
+CACHED_STATES = ("REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT", "COMPLETE")
+_neighbour_tool = [None]            # "ip" or "proc" once one worked, "" when neither does
+capabilities = {"ping": None, "neighbour": None}    # what this device turned out to allow
+
+
+def _ip_neighbour(address):
+    """(state, mac) from `ip neigh`, ("NONE", None) without an entry, None if ip fails."""
+    try:
+        done = subprocess.run(["ip", "neigh", "show", address], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    for line in done.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if parts and parts[0] == address:
+            mac = parts[parts.index("lladdr") + 1] if "lladdr" in parts[:-1] else None
+            return parts[-1].upper(), mac
+    return "NONE", None
+
+
+def _proc_neighbour(address):
+    """(COMPLETE or INCOMPLETE, mac) from /proc/net/arp, which has no finer state."""
+    text = system.read_file("/proc/net/arp") or system.read_file("/proc/self/net/arp")
+    if not text:
+        return None
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 4 and parts[0] == address:
+            try:
+                flags = int(parts[2], 16)
+            except ValueError:
+                flags = 0
+            return ("COMPLETE" if flags & 0x2 else "INCOMPLETE"), parts[3]     # ATF_COM
+    return "NONE", None
+
+
+def neighbour(address):
+    """What the kernel's neighbour table says about address: (state, mac), or None when
+    this device does not let the app read the table."""
+    tool = _neighbour_tool[0]
+    if tool == "" or sys.platform == "win32":
+        return None
+    if tool in (None, "ip"):
+        found = _ip_neighbour(address)
+        if found is not None:
+            _neighbour_tool[0] = capabilities["neighbour"] = "ip"
+            return found
+    found = _proc_neighbour(address)
+    _neighbour_tool[0] = capabilities["neighbour"] = "proc" if found is not None else ""
+    return found
+
+
+def _nudge(address):
+    """Make the kernel resolve address: one empty UDP datagram to the discard port. It is
+    not a wake packet, and a firewall that drops it has already answered ARP by then."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(b"", (address, 9))
+    except OSError:
+        pass
+
+
+def arp_check(address, mac, before=None, settle=ARP_SETTLE):
+    """(answered, detail) from the neighbour table; answered is None when the table cannot
+    be read. `before` is the entry as it was before this round's probes: an entry that
+    appeared since is a fresh answer, one that was already cached has to survive the
+    kernel re-verifying it."""
+    if before is None:
+        before = neighbour(address)
+        if before is None:
+            return None, "This device does not let apps read the network's address table."
+    _nudge(address)
+    cached = before[0] in CACHED_STATES
+    deadline = time.monotonic() + settle
+    found = before
+    while time.monotonic() < deadline:
+        time.sleep(ARP_POLL)
+        found = neighbour(address) or ("NONE", None)
+        state = found[0]
+        if state in ("REACHABLE", "PERMANENT") or (state == "COMPLETE" and not cached):
+            break
+        if state == "FAILED":
+            return False, "No answer to ARP"
+    if found[0] not in ("REACHABLE", "PERMANENT", "COMPLETE"):
+        return False, "No answer to ARP"
+    seen = pcs.parse_mac(found[1] or "")
+    if seen is None or seen == bytes(6):
+        return False, "No answer to ARP"
+    if seen != pcs.parse_mac(mac):
+        return False, ("Another device (%s) has this IP address now. Check the PC's IP "
+                       "address." % pcs.format_mac(seen))
+    return True, "Seen on the network (ARP)"
+
+
 def probe(pc):
     address = pcs.check_host(pc)
     if address is None:
@@ -81,17 +189,37 @@ def probe(pc):
         if not pc["status_port"]:
             return None, "No TCP port to probe."
         return tcp_probe(address, pc["status_port"])
-    return ping(address)
+    # Automatic: ping first; when ping gets no answer, the neighbour table decides.
+    before = neighbour(address)
+    answered, detail = ping(address)
+    capabilities["ping"] = answered is not None
+    if answered:
+        return answered, detail
+    if before is None:
+        if answered is None:
+            return None, ("This device can neither ping nor read the network's address "
+                          "table. Choose a TCP check instead.")
+        return answered, detail
+    seen, arp_detail = arp_check(address, pc["mac"], before)
+    if seen and answered is False:
+        return True, "Seen on the network (ARP). It does not answer ping, probably its firewall."
+    if seen:
+        return True, arp_detail
+    if arp_detail != "No answer to ARP":
+        return False, arp_detail
+    return False, "No answer to ping or ARP" if answered is False else arp_detail
 
 
-def internet_reachable():
+def internet_latency():
+    """Seconds a TCP connection to a public DNS server took, or None when none answered."""
     for address in INTERNET_PROBES:
+        started = time.monotonic()
         try:
             socket.create_connection(address, timeout=3).close()
-            return True
+            return time.monotonic() - started
         except OSError:
             pass
-    return False
+    return None
 
 
 # --- PC status ----------------------------------------------------------------
@@ -139,8 +267,11 @@ def status_of(pc):
         return {"state": "online", "label": "Online", "detail": entry["detail"],
                 "checked_at": entry.get("checked_at")}
     if recently_woken:
-        return {"state": "waking", "label": "Waiting for reply",
-                "detail": "Wake packet sent. No answer yet.", "checked_at": entry.get("checked_at")}
+        detail = "Wake packet sent. No answer yet."
+        if entry.get("detail"):
+            detail += " Last check: %s." % entry["detail"].rstrip(".")
+        return {"state": "waking", "label": "Waiting for reply", "detail": detail,
+                "checked_at": entry.get("checked_at")}
     if state == "unreachable":
         return {"state": "unreachable", "label": "Unreachable", "detail": entry["detail"],
                 "checked_at": entry.get("checked_at")}
@@ -211,7 +342,7 @@ def check_due_pcs():
     if not settings.get("status_checks_enabled"):
         return 0
     interval = settings.get("status_check_interval")
-    probed = 0
+    probed, started = 0, time.monotonic()
     for pc in _current_pcs():
         if not pc["enabled"] or pc["status_method"] == "none":
             continue
@@ -225,6 +356,8 @@ def check_due_pcs():
         answered, detail = probe(pc)
         _record_result(pc, answered, detail)
         probed += 1
+    if probed:
+        last_round.update(at=runtime.now_local(), pcs=probed, seconds=time.monotonic() - started)
     return probed
 
 
@@ -250,7 +383,8 @@ def _run_status_checks():
 def _run_internet_monitor():
     while True:
         if settings.get("internet_check_enabled"):
-            online = internet_reachable()
+            runtime.internet_latency = internet_latency()
+            online = runtime.internet_latency is not None
             if online != runtime.internet:
                 previous = runtime.internet
                 # Timestamp first: a reader that sees the new state always has a time for it.
@@ -262,7 +396,7 @@ def _run_internet_monitor():
                         activity.record_safely("system.internet_down", "Internet is unreachable",
                                                level="warning")
         else:
-            runtime.internet = runtime.internet_since = None
+            runtime.internet = runtime.internet_since = runtime.internet_latency = None
         time.sleep(settings.get("internet_check_interval"))
 
 

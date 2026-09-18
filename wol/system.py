@@ -9,6 +9,7 @@ import os
 import platform
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -26,6 +27,12 @@ host = SimpleNamespace(
     sampled_at=None,
     cpu=None,
     cpu_history=collections.deque(maxlen=HISTORY_SIZE),
+    server_cpu=None,                    # this process, percent of all cores
+    server_cpu_history=collections.deque(maxlen=HISTORY_SIZE),
+    clock=None,                         # (average Hz, percent of maximum, top Hz)
+    clock_history=collections.deque(maxlen=HISTORY_SIZE),
+    cores_online=None,
+    temperatures=None,                  # [(sensor, celsius)], hottest first
     memory=None,                        # (used, total) bytes
     memory_history=collections.deque(maxlen=HISTORY_SIZE),
     storage=None,                       # (used, total) bytes
@@ -171,6 +178,11 @@ def load_average():
 
 
 def device_uptime():
+    # CLOCK_BOOTTIME counts time asleep too and needs no /proc, which Android 8 hides.
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    except (AttributeError, OSError):
+        pass
     text = read_file("/proc/uptime")
     if text:
         try:
@@ -182,6 +194,76 @@ def device_uptime():
         ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_ulonglong
         return ctypes.windll.kernel32.GetTickCount64() / 1000.0
     return None
+
+
+def process_cpu_seconds():
+    """CPU time this server has used, in seconds. Always readable, even on Android."""
+    times = os.times()
+    return times.user + times.system
+
+
+def cpu_clock():
+    """(average Hz, percent of maximum, top Hz) of the online cores from cpufreq. Where
+    Android hides the processor load, the clock speed still shows how hard it works."""
+    current = maximum = top = cores = 0
+    for index in range(os.cpu_count() or 0):
+        base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % index
+        now, most = to_int(read_file(base + "scaling_cur_freq")), to_int(read_file(base + "cpuinfo_max_freq"))
+        if now and most:
+            current, maximum, top, cores = current + now, maximum + most, max(top, most), cores + 1
+    if not cores:
+        return None
+    return current * 1000.0 / cores, min(100.0, 100.0 * current / maximum), top * 1000.0
+
+
+def cores_online():
+    """How many cores are switched on right now; phones park idle ones. "0-3,6" is 5."""
+    text = (read_file("/sys/devices/system/cpu/online") or "").strip()
+    if not text:
+        return None
+    count = 0
+    try:
+        for part in text.split(","):
+            first, _, last = part.partition("-")
+            count += int(last or first) - int(first) + 1
+    except ValueError:
+        return None
+    return count
+
+
+def temperatures(limit=40):
+    """[(sensor, celsius)] from the kernel's thermal zones, hottest first."""
+    found = []
+    for index in range(limit):
+        base = "/sys/class/thermal/thermal_zone%d/" % index
+        raw = to_int(read_file(base + "temp"))
+        if raw is None:
+            if not os.path.isdir(base):
+                break
+            continue
+        celsius = raw / 1000.0 if abs(raw) >= 1000 else float(raw)     # millidegrees or degrees
+        if 1 <= celsius <= 130:
+            found.append(((read_file(base + "type") or "zone %d" % index).strip(), celsius))
+    found.sort(key=lambda item: -item[1])
+    return found or None
+
+
+def default_route():
+    """(interface, gateway address) of the default route, from the kernel's route table."""
+    text = read_file("/proc/self/net/route") or read_file("/proc/net/route")
+    for line in (text or "").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 3 and fields[1] == "00000000" and fields[2] != "00000000":
+            try:
+                gateway = socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+            except (ValueError, struct.error):
+                continue
+            return fields[0], gateway
+    return None
+
+
+def process_threads():
+    return threading.active_count()
 
 
 def process_memory_bytes():
@@ -196,11 +278,34 @@ def processor_name():
     return platform.processor() or None
 
 
+def android_props():
+    """getprop's answers, asked once: they cannot change while the server runs."""
+    if "props" not in device_facts:
+        device_facts["props"] = read_android_props()
+    return device_facts["props"]
+
+
 def android_name():
-    """"Android 14 (Pixel 7)" when getprop answers. Asked once: it cannot change."""
-    if "android" not in device_facts:
-        device_facts["android"] = read_android_props()
-    return device_facts["android"]
+    """"Android 14 (Pixel 7)" on a phone, otherwise None."""
+    props = android_props()
+    release = props.get("ro.build.version.release")
+    if not release:
+        return None
+    model = props.get("ro.product.model") or props.get("ro.product.device")
+    return "Android %s (%s)" % (release, model) if model else "Android " + release
+
+
+def android_details():
+    """The phone facts worth showing: maker and model, API level, security patch, chip."""
+    props = android_props()
+    maker = (props.get("ro.product.manufacturer") or "").strip()
+    model = (props.get("ro.product.model") or "").strip()
+    return {
+        "model": " ".join(part for part in (maker, model) if part) or None,
+        "api": props.get("ro.build.version.sdk"),
+        "patch": props.get("ro.build.version.security_patch"),
+        "chip": props.get("ro.board.platform") or props.get("ro.hardware"),
+    }
 
 
 def read_android_props():
@@ -208,17 +313,13 @@ def read_android_props():
         output = subprocess.run(["getprop"], stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, timeout=5).stdout
     except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+        return {}
     props = {}
     for line in output.decode("utf-8", "replace").splitlines():
         if line.startswith("[") and "]: [" in line:
             key, _, value = line[1:].partition("]: [")
             props[key] = value.rstrip("]")
-    release = props.get("ro.build.version.release")
-    model = props.get("ro.product.model") or props.get("ro.product.device")
-    if not release:
-        return None
-    return "Android %s (%s)" % (release, model) if model else "Android " + release
+    return props
 
 
 def kernel_name():
@@ -254,20 +355,32 @@ def run_sampler():
     """Sample how busy the machine is, forever. CPU and network are counters, so they
     need two reads; the interval comes from Admin > Settings > Monitoring."""
     previous_cpu, previous_net = cpu_counters(), network_counters()
+    previous_own = process_cpu_seconds()
     previous_at, gap = time.monotonic(), 1          # short first gap: the page wants numbers now
+    cores = os.cpu_count() or 1
     while True:
         time.sleep(gap)
         gap = settings.get("metrics_interval")
         current_at = time.monotonic()
-        current_cpu, current_net = cpu_counters(), network_counters()
+        elapsed = current_at - previous_at
+        current_cpu, current_net, current_own = cpu_counters(), network_counters(), process_cpu_seconds()
         percent = cpu_percent(previous_cpu, current_cpu)
-        rates = byte_rates(previous_net, current_net, current_at - previous_at)
+        own = max(0.0, min(100.0, 100.0 * (current_own - previous_own) / (elapsed * cores)))             if elapsed > 0 else None
+        rates = byte_rates(previous_net, current_net, elapsed)
         memory, storage, battery = memory_bytes(), storage_bytes(), battery_state()
         load, uptime, rss = load_average(), device_uptime(), process_memory_bytes()
+        clock, online, heat = cpu_clock(), cores_online(), temperatures()
         with lock:
             host.cpu = percent
             if percent is not None:
                 host.cpu_history.append(percent)
+            host.server_cpu = own
+            if own is not None:
+                host.server_cpu_history.append(own)
+            host.clock = clock
+            if clock:
+                host.clock_history.append(clock[1])
+            host.cores_online, host.temperatures = online, heat
             host.memory = memory
             if memory and memory[1]:
                 host.memory_history.append(100.0 * memory[0] / memory[1])
@@ -275,7 +388,7 @@ def run_sampler():
             host.network, host.rates = current_net, rates
             host.load, host.device_uptime, host.process_memory = load, uptime, rss
             host.sampled_at = runtime.now_local()
-        previous_at = current_at
+        previous_at, previous_own = current_at, current_own
         previous_cpu = current_cpu or previous_cpu
         previous_net = current_net or previous_net
 
@@ -317,10 +430,21 @@ def trend_tile(key, label, value, detail, history, alt):
             "spark": {"line": " ".join(points), "now": " ".join(points[-7:])}}
 
 
+def cpu_time_text(seconds):
+    return "%.1f s" % seconds if seconds < 60 else formatting.duration(seconds)
+
+
+def format_hz(hz):
+    return "%.2f GHz" % (hz / 1e9) if hz >= 1e9 else "%d MHz" % round(hz / 1e6)
+
+
 def snapshot():
     """Every live figure on the System page, formatted once for the page and for the poll."""
     with lock:
         cpu, cpu_history = host.cpu, list(host.cpu_history)
+        own, own_history = host.server_cpu, list(host.server_cpu_history)
+        clock, clock_history = host.clock, list(host.clock_history)
+        online, heat = host.cores_online, host.temperatures
         memory, memory_history = host.memory, list(host.memory_history)
         storage, battery = host.storage, host.battery
         network, rates, load = host.network, host.rates, host.load
@@ -334,6 +458,18 @@ def snapshot():
         tiles.append(trend_tile("cpu", "CPU load", format_percent(cpu), "peak " + peak,
                                 cpu_history, "CPU load over %s. Now %s, peak %s."
                                 % (span, format_percent(cpu), peak)))
+    elif clock:
+        # Android 8 and later hide the processor load; its clock speed is the next best sign.
+        tiles.append(trend_tile("clock", "CPU clock", format_hz(clock[0]),
+                                "%s of top speed" % format_percent(clock[1]), clock_history,
+                                "Average CPU clock speed over %s, as a share of its top "
+                                "speed. Now %s." % (span, format_percent(clock[1]))))
+    if own is not None:
+        peak = format_percent(max(own_history or [own]))
+        tiles.append(trend_tile("server-cpu", "Server CPU", format_percent(own),
+                                "of all cores, peak " + peak, own_history,
+                                "CPU used by this server over %s. Now %s, peak %s."
+                                % (span, format_percent(own), peak)))
     if memory:
         used, total = memory
         share = 100.0 * used / total
@@ -360,6 +496,11 @@ def snapshot():
         "load": ", ".join("%.2f" % value for value in load) if load else None,
         "device-uptime": formatting.duration(booted) if booted is not None else None,
         "battery-temp": "%.1f °C" % battery[2] if battery and battery[2] is not None else None,
+        "cores-online": ("%d of %d" % (online, os.cpu_count())) if online and os.cpu_count() else None,
+        "clock-range": ("%s now, top %s" % (format_hz(clock[0]), format_hz(clock[2]))) if clock else None,
+        "temperature": ("%.0f °C (%s)" % (heat[0][1], heat[0][0])) if heat else None,
+        "server-cpu-time": cpu_time_text(process_cpu_seconds()),
+        "threads": str(process_threads()),
         "received": total_and_rate(network[0] if network else None, rates[0] if rates else None),
         "sent": total_and_rate(network[1] if network else None, rates[1] if rates else None),
         "server-uptime": formatting.duration(runtime.uptime()),

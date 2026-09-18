@@ -71,7 +71,10 @@ def format_rate(per_second):
 
 
 def format_percent(value):
-    return None if value is None else "%d%%" % round(value)
+    """Whole percent, except below 10 %, where one decimal keeps small loads visible."""
+    if value is None:
+        return None
+    return "%.1f%%" % value if 0 < value < 9.95 and round(value, 1) != round(value) else "%d%%" % round(value)
 
 
 def plural(count, singular, plural_form=None):

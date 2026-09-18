@@ -161,7 +161,7 @@ def pc_detail(pc_id):
                           (pc_id,)).fetchone()
     return render_template("admin/pc_detail.html", pc=pc, status=monitor.status_of(pc),
                            targets=targets, problems=problems,
-                           hints=pcs.hints(pc, system.lan_address()), test=test,
+                           hints=pcs.hints(pc, system.lan_address(), pcs.load_all(conn)), test=test,
                            history=history, events=events, totals=totals,
                            check_host=pcs.check_host(pc))
 

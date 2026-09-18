@@ -21,6 +21,7 @@ setup_code = None               # printed to the console while setup is not done
 setup_code_logged = 0.0         # monotonic time the code was last printed
 internet = None                 # None until the first check, then True or False
 internet_since = None
+internet_latency = None         # seconds the latest successful internet check took
 
 
 restart_hook = None             # tests replace the exit with a recorder

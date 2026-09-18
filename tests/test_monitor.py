@@ -41,6 +41,76 @@ class ProbeTest(unittest.TestCase):
             self.assertEqual(monitor.tcp_probe("192.168.1.25", 3389)[0], False)
 
 
+MAC = "02-00-00-00-00-07"               # locally administered, never a real adapter
+ADDRESS = "192.0.2.7"                   # documentation range, never a real host
+
+
+class NeighbourTest(unittest.TestCase):
+    """The ARP fallback: reads the kernel's neighbour table, never trusts a stale entry
+    or another device's MAC."""
+
+    def setUp(self):
+        monitor._neighbour_tool[0] = None
+        self.addCleanup(monitor._neighbour_tool.__setitem__, 0, None)
+        nudge = mock.patch.object(monitor, "_nudge")
+        nudge.start()
+        self.addCleanup(nudge.stop)
+
+    def test_ip_neigh_output(self):
+        with mock.patch("subprocess.run", return_value=completed(
+                0, "192.0.2.7 dev wlan0 lladdr 02:00:00:00:00:07 REACHABLE\n")):
+            self.assertEqual(monitor._ip_neighbour(ADDRESS), ("REACHABLE", "02:00:00:00:00:07"))
+        with mock.patch("subprocess.run", return_value=completed(0, "192.0.2.7 dev wlan0  FAILED\n")):
+            self.assertEqual(monitor._ip_neighbour(ADDRESS), ("FAILED", None))
+        with mock.patch("subprocess.run", return_value=completed(0, "")):
+            self.assertEqual(monitor._ip_neighbour(ADDRESS), ("NONE", None))
+        with mock.patch("subprocess.run", return_value=completed(2, "Cannot bind netlink socket")):
+            self.assertIsNone(monitor._ip_neighbour(ADDRESS))
+
+    def test_proc_net_arp(self):
+        table = ("IP address       HW type     Flags       HW address            Mask     Device\n"
+                 "192.0.2.7        0x1         0x2         02:00:00:00:00:07     *        wlan0\n"
+                 "192.0.2.8        0x1         0x0         00:00:00:00:00:00     *        wlan0\n")
+        with mock.patch("wol.system.read_file", return_value=table):
+            self.assertEqual(monitor._proc_neighbour(ADDRESS), ("COMPLETE", "02:00:00:00:00:07"))
+            self.assertEqual(monitor._proc_neighbour("192.0.2.8")[0], "INCOMPLETE")
+            self.assertEqual(monitor._proc_neighbour("192.0.2.9"), ("NONE", None))
+        with mock.patch("wol.system.read_file", return_value=None):
+            self.assertIsNone(monitor._proc_neighbour(ADDRESS))
+
+    def check(self, before, answers, settle=0.2):
+        with mock.patch.object(monitor, "neighbour", side_effect=list(answers) + [answers[-1]] * 50), \
+                mock.patch.object(monitor, "ARP_POLL", 0.01):
+            return monitor.arp_check(ADDRESS, MAC, before, settle=settle)
+
+    def test_fresh_answer_with_the_right_mac(self):
+        answered, detail = self.check(("NONE", None), [("COMPLETE", "02:00:00:00:00:07")])
+        self.assertTrue(answered)
+        self.assertIn("ARP", detail)
+
+    def test_another_device_on_the_address_is_not_the_pc(self):
+        answered, detail = self.check(("NONE", None), [("REACHABLE", "02:00:00:00:00:99")])
+        self.assertFalse(answered)
+        self.assertIn("02-00-00-00-00-99", detail)
+
+    def test_failed_and_missing_entries(self):
+        self.assertFalse(self.check(("NONE", None), [("INCOMPLETE", None), ("FAILED", None)])[0])
+        self.assertFalse(self.check(("NONE", None), [("NONE", None)])[0])
+
+    def test_cached_entry_must_survive_reverification(self):
+        # /proc/net/arp cannot tell a stale entry from a fresh one: an entry that drops out
+        # while the kernel re-checks it means the PC is gone.
+        gone = self.check(("COMPLETE", "02:00:00:00:00:07"),
+                          [("COMPLETE", "02:00:00:00:00:07"), ("INCOMPLETE", None)])
+        self.assertFalse(gone[0])
+        kept = self.check(("COMPLETE", "02:00:00:00:00:07"), [("COMPLETE", "02:00:00:00:00:07")])
+        self.assertTrue(kept[0])
+
+    def test_no_table_on_this_device(self):
+        with mock.patch.object(monitor, "neighbour", return_value=None):
+            self.assertIsNone(monitor.arp_check(ADDRESS, MAC)[0])
+
+
 class StatusTest(AppTestCase):
     def setUp(self):
         super(StatusTest, self).setUp()
@@ -86,6 +156,35 @@ class StatusTest(AppTestCase):
         with db.session() as conn:
             message = conn.execute("SELECT message FROM events WHERE type = 'status.online'").fetchone()[0]
         self.assertIn("after the wake request", message)
+
+    def test_waking_shows_what_the_last_check_found(self):
+        monitor._record_result(self.pc, False, "No answer to ping or ARP")
+        monitor.watch_after_wake(self.pc["id"])
+        self.assertIn("Last check: No answer to ping or ARP", monitor.status_of(self.pc)["detail"])
+
+    def test_automatic_check_falls_back_to_arp(self):
+        pc = dict(self.pc, hosts=[ADDRESS], mac=MAC)
+        with mock.patch.object(monitor, "neighbour", return_value=("NONE", None)), \
+                mock.patch.object(monitor, "ping", return_value=(False, "No answer to ping")), \
+                mock.patch.object(monitor, "arp_check", return_value=(True, "Seen on the network (ARP)")):
+            answered, detail = monitor.probe(pc)
+        self.assertTrue(answered)
+        self.assertIn("does not answer ping", detail)
+        with mock.patch.object(monitor, "neighbour", return_value=("NONE", None)), \
+                mock.patch.object(monitor, "ping", return_value=(False, "No answer to ping")), \
+                mock.patch.object(monitor, "arp_check", return_value=(False, "No answer to ARP")):
+            self.assertEqual(monitor.probe(pc), (False, "No answer to ping or ARP"))
+        # Neither ping nor the table: say so instead of guessing.
+        with mock.patch.object(monitor, "neighbour", return_value=None), \
+                mock.patch.object(monitor, "ping", return_value=(None, "ping is not available")):
+            answered, detail = monitor.probe(pc)
+        self.assertIsNone(answered)
+        self.assertIn("TCP check", detail)
+        # A TCP check never falls back: it asks whether a service answers.
+        with mock.patch.object(monitor, "tcp_probe", return_value=(False, "No answer on TCP 3389")), \
+                mock.patch.object(monitor, "arp_check") as arp:
+            self.assertFalse(monitor.probe(dict(pc, status_method="tcp", status_port=3389))[0])
+        arp.assert_not_called()
 
     def test_checks_follow_the_interval_and_can_be_turned_off(self):
         with mock.patch("wol.monitor.ping", return_value=(True, "Answered ping")) as ping:

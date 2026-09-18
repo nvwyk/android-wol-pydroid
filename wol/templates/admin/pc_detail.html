@@ -72,7 +72,7 @@
       <div><dt>UDP ports</dt><dd class="mono">{{ pc.ports|join(', ') or 'None' }}</dd></div>
       <div><dt>Packets per wake</dt><dd class="num">{{ targets|length }}</dd></div>
       <div><dt>Reachability check</dt><dd>
-        {%- if pc.status_method == 'ping' %}Ping {{ check_host or '(no IP address)' }}
+        {%- if pc.status_method == 'ping' %}Automatic: ping, then ARP, {{ check_host or '(no IP address)' }}
         {%- elif pc.status_method == 'tcp' %}TCP {{ pc.status_port }} on {{ check_host or '(no IP address)' }}
         {%- else %}Off{% endif %}</dd></div>
       <div><dt>Enabled</dt><dd>{{ 'Yes' if pc.enabled else 'No' }}</dd></div>

@@ -261,6 +261,7 @@ main:focus { outline: none; }
 }
 .group { display: grid; gap: 4px; }
 .stack { display: grid; gap: 12px; }
+.stack-tight { display: grid; gap: 8px; margin-top: 4px; }
 
 .grid-2 { display: grid; gap: 16px; }
 @media (min-width: 800px) {

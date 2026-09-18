@@ -4,13 +4,14 @@ import hmac
 import logging
 import os
 import platform
+import sqlite3
 import time
 
 from flask import (Blueprint, abort, flash, jsonify, redirect, render_template, request,
                    session, url_for)
 
-from . import APP_VERSION, activity, auth, db, formatting, monitor, passwords, pcs, runtime, \
-    settings, system, wake, web
+from . import APP_VERSION, activity, auth, db, formatting, insights, monitor, passwords, pcs, \
+    runtime, settings, system, wake, web
 
 logger = logging.getLogger("wol")
 bp = Blueprint("main", __name__)
@@ -284,40 +285,111 @@ def system_page():
     snapshot = system.snapshot()
     text = snapshot["text"]
     cores = os.cpu_count()
-    android = system.android_name()
+    android, phone = system.android_name(), system.android_details()
     kernel = system.kernel_name()
+    route = system.default_route()
+    conn = db.get()
+    all_pcs = pcs.load_all(conn)
+    checked = [pc for pc in all_pcs if pc["enabled"] and pc["status_method"] != "none"]
     groups = [
         ("Device", [
+            ("Model", None, phone["model"]),
             # On a phone the Android version and the kernel are both worth knowing.
             # Anywhere else they are the same fact, so the kernel row stays out.
-            ("Operating system", None, android or kernel),
+            ("Operating system", None, ("%s, API %s" % (android.split(" (")[0], phone["api"])
+                                        if android and phone["api"] else android or kernel)),
+            ("Security patch", None, phone["patch"]),
             ("Kernel", None, kernel if android else None),
-            ("Processor", None, system.processor_name()),
-            ("Cores", None, str(cores) if cores else None),
+            ("Processor", None, phone["chip"] or system.processor_name()),
+            ("Cores online", "cores-online", text.get("cores-online") or (str(cores) if cores else None)),
+            ("CPU clock", "clock-range", text.get("clock-range")),
             ("Load average", "load", text.get("load")),
             ("Device uptime", "device-uptime", text.get("device-uptime")),
+            ("Hottest sensor", "temperature", text.get("temperature")),
             ("Battery temperature", "battery-temp", text.get("battery-temp")),
         ]),
         ("Network", [
             ("Listening on", None, "%s:%d" % (system.lan_address() or "0.0.0.0",
                                               runtime.listening_port or 0)),
+            ("Interface", None, route[0] if route else None),
+            ("Gateway", None, route[1] if route else None),
+            ("Internet", None, internet_text()),
             ("You reached it at", None, request.host),
             ("Your address", None, request.remote_addr),
             ("Received", "received", text.get("received")),
             ("Sent", "sent", text.get("sent")),
         ]),
+        ("Reachability checks", [
+            ("PCs online", None, "%d of %d checked" % (
+                sum(1 for pc in checked if monitor.status_of(pc)["state"] == "online"),
+                len(checked)) if settings.get("status_checks_enabled") else None),
+            ("Check interval", None, "Every %s" % formatting.duration(settings.get(
+                "status_check_interval")) if settings.get("status_checks_enabled") else "Off"),
+            ("Latest round", None, round_text()),
+            ("Ping", None, {True: "Available", False: "Not available on this device"}.get(
+                monitor.capabilities["ping"], "Not tried yet")),
+            ("Address table (ARP)", None, {"ip": "Readable (ip neigh)",
+                                           "proc": "Readable (/proc/net/arp)",
+                                           "": "Not readable on this device"}.get(
+                monitor.capabilities["neighbour"], "Not needed yet")),
+        ]),
         ("This server", [
             ("Version", None, runtime.version_label()),
+            ("Started", None, formatting.clock(runtime.started_at)),
             ("Server uptime", "server-uptime", text.get("server-uptime")),
             ("Memory in use", "process-memory", text.get("process-memory")),
+            ("CPU time used", "server-cpu-time", text.get("server-cpu-time")),
+            ("Threads", "threads", text.get("threads")),
             ("Process id", None, str(os.getpid())),
             ("Python", None, platform.python_version()),
+            ("Flask", None, package_version("flask")),
+            ("SQLite", None, sqlite3.sqlite_version),
             ("Auto-update", None, update_status_text()),
+            ("Last update check", None, update_check_text()),
         ]),
     ]
     groups = [(title, [row for row in rows if row[2]]) for title, rows in groups]
     return render_template("system.html", snapshot=snapshot, groups=groups,
+                           insights=insights.collect(conn),
                            poll_interval=settings.get("metrics_interval"))
+
+
+def internet_text():
+    if not settings.get("internet_check_enabled"):
+        return "Check off"
+    if runtime.internet is None:
+        return "Checking"
+    if runtime.internet:
+        latency = runtime.internet_latency
+        return "Reachable, %d ms" % (latency * 1000) if latency is not None else "Reachable"
+    since = runtime.internet_since
+    return "Unreachable since %s" % formatting.clock(since) if since else "Unreachable"
+
+
+def round_text():
+    last = dict(monitor.last_round)
+    if not last:
+        return None
+    return "%s, %s in %.1f s" % (formatting.clock(last["at"]),
+                                 formatting.plural(last["pcs"], "PC"), last["seconds"])
+
+
+def update_check_text():
+    if not runtime.supervised():
+        return None
+    state = runtime.launcher_state()
+    if not state["last_check_at"]:
+        return "Not yet"
+    return "%s, %s" % (formatting.clock(state["last_check_at"]),
+                       (state["last_check_result"] or "no result").rstrip("."))
+
+
+def package_version(name):
+    try:
+        from importlib import metadata
+        return metadata.version(name)
+    except Exception:           # no metadata for this install; the row is left out
+        return None
 
 
 @bp.route("/system.json")

@@ -6,7 +6,7 @@ an always-on device such as an old Android phone running Pydroid 3.
 - **Several PCs**, each with its own MAC address, target addresses, UDP ports, reachability
   check, history and on/off switch.
 - **Honest status.** A sent packet is reported as sent. A PC is only called *Online* after it
-  answers a ping or TCP probe.
+  answers a ping, a TCP probe, or ARP with its own MAC address.
 - **Admin panel** for everything: PCs, settings, security, activity log, backups. There is no
   configuration file to edit.
 - **SQLite database** (`wol.db`) as the single source of truth, with a one-time migration from
@@ -213,8 +213,8 @@ Each card has a status chip:
 
 | Status | Meaning |
 |---|---|
-| **Online** | The PC answered its last ping or TCP probe |
-| **Waiting for reply** | A wake packet was sent in the last three minutes and the PC has not answered yet |
+| **Online** | The PC answered its last check: ping, ARP with its own MAC address, or TCP |
+| **Waiting for reply** | A wake packet was sent in the last three minutes and the PC has not answered yet. The card also shows what the last check found |
 | **Unreachable** | The PC did not answer its last two checks. It is off, asleep, or blocks the probe |
 | **Not checked** | Reachability checks are off, for this PC or everywhere |
 | **Checking** | The first check since the server started is on its way |
@@ -225,6 +225,43 @@ Pressing **Wake** sends the magic packet to every address and port of that PC on
 exactly how many packets left the device. A sent packet does not prove the PC woke up. After a
 wake request the PC is checked every 10 seconds for three minutes, and the card turns Online
 when it answers. The page refreshes itself while it is open.
+
+### How the automatic check works
+
+Windows drops ping on networks it calls **Public**, which is its default for a new network, so
+ping alone often says a running PC is off. The automatic check therefore works in two steps:
+
+1. It pings the PC's IP address. An answer means Online.
+2. Without an answer, it looks the IP address up in this device's network address table (ARP).
+   Every PC has to answer ARP to be on the network at all, whatever its firewall does. The
+   entry only counts when it carries **this PC's MAC address**, so another device that got the
+   same IP address is reported as such, never as your PC. An entry that was already cached has
+   to survive the kernel re-checking it (about 9 seconds), so a PC that just shut down is not
+   reported as Online.
+
+Android 9 and older let apps read the table (`ip neigh` or `/proc/net/arp`). Android 10 and
+later do not; there the check uses ping alone, and a TCP check is the alternative. The System
+page shows which of the two this device allows.
+
+### The System page
+
+**System** shows the device running the server, its network and the PC checks:
+
+- **Insights** at the top: plain-language notes about anything that needs attention, such as
+  low storage or memory, a hot phone, the internet being down, failed sign-ins, a failed
+  update, two PCs sharing one MAC address, or a PC that blocks ping (with how to allow it).
+- **Live figures**, refreshed every few seconds with a 5-minute trend line: CPU load, this
+  server's own CPU use, memory, storage and battery. Android 8 and later do not let apps read the
+  total CPU load or the battery; there the page shows the CPU clock speed instead, which rises
+  and falls with the load.
+- **Device**: model, Android version and API level, security patch, processor, cores online,
+  clock speed, uptime and the hottest temperature sensor, where Android allows reading them.
+- **Network**: address and port, network interface, gateway, internet reachability with its
+  latency, and traffic since boot.
+- **Reachability checks**: how many PCs are online, the check interval, the latest round, and
+  whether this device allows ping and reading the address table.
+- **This server**: version, start time, uptime, memory and CPU time used, threads, and the
+  Python, Flask and SQLite versions, plus the latest automatic update check.
 
 ---
 
@@ -239,7 +276,7 @@ when it answers. The page refreshes itself while it is open.
 | Broadcast addresses | Your network address ending in `.255`, for example `192.168.1.255`. This reaches a sleeping PC most reliably |
 | PC's IP addresses | The PC's own address. It also gets a packet, and the reachability check probes it |
 | UDP ports | Usually `9`. Some PCs also listen on `7`. Separate several with commas |
-| Reachability check | **Ping** (one ping per check), **TCP port** (connects to a port such as 3389 for Remote Desktop, 445 for file sharing or 22 for SSH) or **Off** |
+| Reachability check | **Automatic** (ping, then ARP; see [How the automatic check works](#how-the-automatic-check-works)), **TCP port** (connects to a port such as 3389 for Remote Desktop, 445 for file sharing or 22 for SSH) or **Off** |
 | Enabled | A disabled PC keeps its settings and history but has no Wake button and is not checked |
 
 Every address gets a packet on every port, so two addresses and two ports make four packets.
@@ -362,7 +399,7 @@ immediately, except the server port.
 | Publish the status page | On | Off hides `/status` and `/status.json` |
 | PCs on the status page | Counts only | Or status per PC without names, or names and status |
 | Show wake activity / device load / internet connectivity / version and update status | On | Each part of the status page |
-| Check whether PCs are reachable | On | Master switch for ping and TCP checks |
+| Check whether PCs are reachable | On | Master switch for the automatic and TCP checks |
 | PC check interval | 60 s | 15 to 3600. Every 10 s for three minutes after a wake request |
 | Check internet connectivity | On | Connects to 1.1.1.1 and 8.8.8.8 on port 53 |
 | Internet check interval | 60 s | 15 to 3600 |
@@ -506,12 +543,18 @@ restart or a sign-out elsewhere). Reload the page and try again.
 address if the PC has none. Use **Send test packet** on the PC's page to see exactly where the
 packets went.
 
-**The PC is on but shows Unreachable.** Its firewall blocks the probe. Windows answers ping only
-when *File and Printer Sharing (Echo Request)* is allowed; otherwise choose a TCP check on a port
-the PC answers on, or turn the check off for that PC.
+**The PC is on but shows Unreachable.** With the automatic check this means neither ping nor
+ARP found it. Check that the PC's IP address in Admin is still correct (the router may have
+given it a new one; reserve a fixed address in the router). On Android 10 and later, where the
+address table is closed to apps, the PC also has to answer ping: set its network to Private, or
+allow *File and Printer Sharing (Echo Request - ICMPv4-In)* in Windows Defender Firewall. Or
+choose a TCP check on a port the PC answers on.
 
-**Status Unknown, "ping is not available".** Some Android builds do not allow `ping` for apps.
-Choose a TCP check for the PC.
+**"Another device has this IP address now".** The PC's IP address changed and something else
+uses the old one. Update the address in Admin > PCs.
+
+**Status Unknown, "can neither ping nor read the network's address table".** This Android build
+allows neither. Choose a TCP check for the PC.
 
 **Signing in takes minutes.** The bcrypt package was installed when the password was set and is
 missing now (for example after Pydroid upgraded its Python). Reinstall it, or reset the password,
@@ -589,7 +632,8 @@ wol/                 The application, updated together with server.py
   settings.py        Setting definitions and the settings cache
   pcs.py             PCs: validation, storage, wake targets
   wake.py            Magic packets
-  monitor.py         Background checks: PCs, internet, cleanup
+  monitor.py         Background checks: PCs (ping, ARP, TCP), internet, cleanup
+  insights.py        Plain-language notes for the System page
   system.py          Device load figures
   activity.py        Activity log and wake history
   legacy.py          One-time config.json import

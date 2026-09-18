@@ -15,7 +15,8 @@ DESCRIPTION_MAX = 500
 MAX_ADDRESSES = 8
 MAX_PORTS = 8
 DEFAULT_PORTS = [9]
-STATUS_METHODS = [("ping", "Ping"), ("tcp", "TCP port"), ("none", "Off")]
+# "ping" is stored for the automatic check (ping, then ARP); the value predates ARP.
+STATUS_METHODS = [("ping", "Automatic"), ("tcp", "TCP port"), ("none", "Off")]
 
 _SEPARATORS = re.compile(r"[\s,;]+")
 
@@ -296,9 +297,16 @@ def check_host(pc):
     return None
 
 
-def hints(pc, lan_address=None):
-    """Advice about a PC's wake setup that is not strictly an error."""
+def hints(pc, lan_address=None, others=()):
+    """Advice about a PC's wake setup that is not strictly an error. `others` are the
+    other PCs, to spot two entries for the same network adapter."""
     advice = []
+    twins = [other["name"] for other in others
+             if other["id"] != pc["id"] and parse_mac(other["mac"]) == parse_mac(pc["mac"])]
+    if twins:
+        advice.append("%s has the same MAC address. Both entries wake the same network "
+                      "adapter; delete one, or correct the MAC if they are different PCs."
+                      % " and ".join(twins))
     if not pc["broadcasts"]:
         advice.append("No broadcast address. A sleeping PC often misses packets sent to its "
                       "own IP, because the network forgets where that IP lives. Add the "

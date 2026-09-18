@@ -60,7 +60,7 @@
                {%- if form.get('status_method', 'ping') == value %} checked{% endif %}>
         <span class="check-label" id="method-{{ value }}-label">{{ label }}</span>
         <span class="hint" id="method-{{ value }}-hint">
-          {%- if value == 'ping' %}One ping to the PC's IP address per check. Windows answers ping only if its firewall allows it.
+          {%- if value == 'ping' %}Pings the PC's IP address. If ping gets no answer, for example because Windows blocks it on a Public network, the check looks for the PC's MAC address in this device's network address table (ARP), which works through any firewall.
           {%- elif value == 'tcp' %}Connects to a TCP port on the PC, such as 3389 (Remote Desktop), 445 (file sharing) or 22 (SSH).
           {%- else %}Never probe this PC. Its status shows as not checked.{% endif -%}
         </span>

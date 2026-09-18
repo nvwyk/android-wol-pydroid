@@ -9,6 +9,7 @@ import socket
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -43,6 +44,9 @@ def reset_process_state():
     for table in (monitor._status, monitor._watch_until, monitor._woken_at):
         table.clear()
     monitor._pc_list[0], monitor._pc_list[1] = 0.0, None
+    monitor._neighbour_tool[0] = None
+    monitor.capabilities.update(ping=None, neighbour=None)
+    monitor.last_round.clear()
     settings._cache.clear()
     passwords._cost = 4                 # the minimum bcrypt cost keeps the suite fast
 
@@ -53,6 +57,10 @@ class AppTestCase(unittest.TestCase):
     def setUp(self):
         self.base = tempfile.mkdtemp(prefix="wol-test-")
         reset_process_state()
+        # Never read this machine's real ARP table or nudge a real address from a test.
+        patcher = mock.patch.object(monitor, "neighbour", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.prepare()
 
     def tearDown(self):
